@@ -1,331 +1,544 @@
-# ============================================
-# ТЕЛЕГРАМ БОТ ДЛЯ ВЕТКЛИНИКИ
-# Версия: финальная для деплоя на Railway
-# ============================================
-
-# Импортируем нужные библиотеки
+import asyncio
 import logging
 import os
 import redis
-from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 
 # ============================================
-# 1. НАСТРОЙКИ (берутся из переменных окружения)
+# НАСТРОЙКИ
 # ============================================
 
-# Токен бота — получаем из переменной окружения BOT_TOKEN
-# Как добавить на Railway: Variables → BOT_TOKEN
-API_TOKEN = os.getenv("BOT_TOKEN")
-
-# ID группы, где будут создаваться темы с консультациями
-GROUP_ID = int(os.getenv("GROUP_ID", "-1003971711034"))
-
-# ID администраторов (кто может подтверждать оплату и управлять)
-ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "1092230808").split(",") if x.strip()]
-
-# Номер телефона для оплаты через СБП
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROUP_ID = os.getenv("GROUP_ID")
+ADMIN_IDS = os.getenv("ADMIN_IDS")
 PHONE_NUMBER = os.getenv("PHONE_NUMBER", "+79256530940")
 
-# ============================================
-# 2. ПОДКЛЮЧЕНИЕ К REDIS (база данных для хранения состояний)
-# ============================================
+# Максимум активных консультаций на врача
+MAX_ACTIVE_PER_DOCTOR = 3
 
-# Railway сам подставит REDIS_URL, когда мы добавим базу данных
-# Локально для теста используем redis://localhost:6379
+print("=" * 50)
+print("ПРОВЕРКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ:")
+print(f"BOT_TOKEN: {'✅ НАЙДЕН' if BOT_TOKEN else '❌ ОТСУТСТВУЕТ'}")
+print(f"GROUP_ID: {GROUP_ID if GROUP_ID else '❌ ОТСУТСТВУЕТ'}")
+print(f"ADMIN_IDS: {ADMIN_IDS if ADMIN_IDS else '❌ ОТСУТСТВУЕТ'}")
+print(f"PHONE_NUMBER: {PHONE_NUMBER}")
+print("=" * 50)
+
+if not BOT_TOKEN:
+    print("❌ КРИТИЧЕСКАЯ ОШИБКА: BOT_TOKEN не найден!")
+    exit(1)
+
+GROUP_ID = int(GROUP_ID) if GROUP_ID else None
+ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS.split(",")] if ADMIN_IDS else []
+
 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
 r = redis.from_url(redis_url, decode_responses=True)
 
-# ============================================
-# 3. ЗАПУСК БОТА
-# ============================================
+bot = Bot(token=BOT_TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
-
-# Включаем логирование (чтобы видеть ошибки)
 logging.basicConfig(level=logging.INFO)
 
 # ============================================
-# 4. НАСТРОЙКИ ВРАЧЕЙ (можно добавлять постепенно)
+# НАСТРОЙКИ ВРАЧЕЙ
 # ============================================
 
-# Названия специализаций (как их увидит клиент)
 TOPICS = {
     "dentistry": "Стоматолог",
     "surgery": "Хирург",
     "therapy": "Терапевт"
 }
 
-# ID врачей (замените на реальные Telegram ID)
-# Как узнать ID: напишите @userinfobot
 DOCTORS = {
     "dentistry": [1092230808],      # 👈 ВЫ (админ) для теста
     "surgery": [222222222],         # 👈 ЗАМЕНИТЕ на ID хирурга
     "therapy": [1906114179]         # 👈 Терапевт
 }
 
-# Счётчик для очереди терапевтов (round-robin)
-# Если терапевтов несколько — клиенты будут распределяться по очереди
-therapy_index = 0
+# ============================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ============================================
+
+def get_anonymous_id(topic, user_id):
+    """Генерирует анонимный ID клиента с префиксом по специализации"""
+    short_id = str(user_id)[-4:]
+    prefix_map = {"dentistry": "ST", "surgery": "SR", "therapy": "TP"}
+    prefix = prefix_map.get(topic, "CL")
+    return f"{prefix}{short_id}"
 
 def get_doctor(topic):
     """Возвращает ID врача для выбранной темы"""
-    global therapy_index
-    
     if topic == "therapy":
-        # Для терапевтов — по очереди
-        doctor_id = DOCTORS["therapy"][therapy_index % len(DOCTORS["therapy"])]
-        therapy_index += 1
+        current_idx = int(r.get("therapy_round_robin_idx") or 0)
+        doctor_id = DOCTORS["therapy"][current_idx % len(DOCTORS["therapy"])]
+        r.set("therapy_round_robin_idx", current_idx + 1)
         return doctor_id
-    else:
-        # Для остальных — первый в списке
-        return DOCTORS[topic][0]
+    return DOCTORS[topic][0]
+
+def get_active_count(doctor_id):
+    """Возвращает количество активных консультаций у врача"""
+    active_clients = r.smembers(f"doctor:{doctor_id}:active_clients")
+    return len(active_clients)
+
+def can_take_new_client(doctor_id):
+    """Проверяет, может ли врач взять нового клиента"""
+    return get_active_count(doctor_id) < MAX_ACTIVE_PER_DOCTOR
+
+def add_active_client(doctor_id, user_id):
+    """Добавляет клиента в список активных у врача"""
+    r.sadd(f"doctor:{doctor_id}:active_clients", user_id)
+
+def remove_active_client(doctor_id, user_id):
+    """Удаляет клиента из списка активных у врача"""
+    r.srem(f"doctor:{doctor_id}:active_clients", user_id)
+
+def add_to_queue(topic, user_id, anonymous_id):
+    """Добавляет клиента в очередь"""
+    queue_key = f"queue:{topic}"
+    r.rpush(queue_key, f"{user_id}:{anonymous_id}")
+    return r.llen(queue_key) - 1
+
+def get_next_from_queue(topic):
+    """Забирает следующего клиента из очереди"""
+    queue_key = f"queue:{topic}"
+    next_client = r.lpop(queue_key)
+    if next_client:
+        user_id, anonymous_id = next_client.split(":")
+        return int(user_id), anonymous_id
+    return None, None
 
 # ============================================
-# 5. КОМАНДА /start
+# КЛАВИАТУРЫ
 # ============================================
 
-@dp.message_handler(commands=["start"])
-async def start(msg: types.Message):
-    # Создаём клавиатуру с выбором специалиста
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    for t in TOPICS:
-        kb.add(TOPICS[t])
-    
-    await msg.answer(
+def get_main_keyboard():
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=TOPICS[t])] for t in TOPICS],
+        resize_keyboard=True
+    )
+    return kb
+
+def get_doctor_keyboard(user_id):
+    """Клавиатура для врача с кнопками действий"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Завершить", callback_data=f"end_confirm:{user_id}")],
+        [InlineKeyboardButton(text="🔄 Перенаправить", callback_data=f"transfer_confirm:{user_id}")],
+        [InlineKeyboardButton(text="⏳ Врач занят", callback_data=f"busy:{user_id}")],
+        [InlineKeyboardButton(text="📋 Мои клиенты", callback_data="show_clients")],
+    ])
+    return keyboard
+
+# ============================================
+# FSM СОСТОЯНИЯ
+# ============================================
+
+class PaymentState(StatesGroup):
+    waiting_payment = State()
+    waiting_receipt = State()
+
+# ============================================
+# КОМАНДА /start
+# ============================================
+
+@dp.message(Command("start"))
+async def start(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
         "🐾 Добро пожаловать в онлайн-консультации ветклиники!\n\n"
         "Выберите специалиста:",
-        reply_markup=kb
+        reply_markup=get_main_keyboard()
     )
 
 # ============================================
-# 6. ВЫБОР СПЕЦИАЛИСТА
+# КОМАНДА /clients (список активных клиентов для врача)
 # ============================================
 
-@dp.message_handler(lambda m: m.text in TOPICS.values())
-async def choose_topic(msg: types.Message):
-    user_id = msg.from_user.id
+@dp.message(Command("clients"))
+async def list_active_clients_command(message: types.Message):
+    doctor_id = message.from_user.id
+    active_clients = r.smembers(f"doctor:{doctor_id}:active_clients")
     
-    # Определяем, какую тему выбрал клиент
+    if not active_clients:
+        await message.answer("📭 Нет активных консультаций.")
+        return
+    
+    text = "📋 <b>Ваши активные клиенты:</b>\n\n"
+    for client_id in active_clients:
+        client_id = int(client_id)
+        anonymous_id = r.get(f"user:{client_id}:anonymous_id") or "клиент"
+        text += f"• {anonymous_id}\n"
+    
+    await message.answer(text, parse_mode="HTML")
+
+# ============================================
+# ВЫБОР СПЕЦИАЛИСТА
+# ============================================
+
+@dp.message(F.text.in_(list(TOPICS.values())))
+async def choose_topic(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    
     topic_key = None
     for k, v in TOPICS.items():
-        if v == msg.text:
+        if v == message.text:
             topic_key = k
             break
     
-    # Сохраняем выбор в Redis
+    anonymous_id = get_anonymous_id(topic_key, user_id)
+    
     r.set(f"user:{user_id}:topic", topic_key)
-    r.set(f"user:{user_id}:payment_status", "waiting_payment")
+    r.set(f"user:{user_id}:anonymous_id", anonymous_id)
+    await state.update_data(topic=message.text, anonymous_id=anonymous_id)
     
-    # Кнопка "Я оплатил"
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("✅ Я оплатил")
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="✅ Я оплатил")]],
+        resize_keyboard=True
+    )
     
-    await msg.answer(
-        f"💰 Консультация {msg.text} — 500 ₽\n\n"
+    await message.answer(
+        f"💰 Консультация {message.text} — 500 ₽\n\n"
         f"📞 Оплата по номеру телефона (СБП):\n"
         f"<code>{PHONE_NUMBER}</code>\n\n"
+        f"Ваш ID для консультации: <b>{anonymous_id}</b>\n\n"
         f"После оплаты нажмите кнопку ниже и отправьте чек.",
         reply_markup=kb,
         parse_mode="HTML"
     )
+    await state.set_state(PaymentState.waiting_payment)
 
 # ============================================
-# 7. КЛИЕНТ НАЖАЛ "Я ОПЛАТИЛ"
+# Я ОПЛАТИЛ
 # ============================================
 
-@dp.message_handler(lambda m: m.text == "✅ Я оплатил")
-async def paid_button(msg: types.Message):
-    user_id = msg.from_user.id
-    status = r.get(f"user:{user_id}:payment_status")
-    
-    if status != "waiting_payment":
-        await msg.answer("Сначала выберите специалиста через /start")
-        return
-    
-    r.set(f"user:{user_id}:payment_status", "waiting_receipt")
-    await msg.answer("📎 Отправьте скриншот или фото чека.")
+@dp.message(F.text == "✅ Я оплатил", PaymentState.waiting_payment)
+async def paid_button(message: types.Message, state: FSMContext):
+    await message.answer("📎 Отправьте скриншот или фото чека.")
+    await state.set_state(PaymentState.waiting_receipt)
 
 # ============================================
-# 8. КЛИЕНТ ОТПРАВИЛ ЧЕК (ФОТО)
+# ПРИЁМ ЧЕКА
 # ============================================
 
-@dp.message_handler(content_types=["photo"])
-async def handle_receipt(msg: types.Message):
-    user_id = msg.from_user.id
-    status = r.get(f"user:{user_id}:payment_status")
+@dp.message(PaymentState.waiting_receipt, F.photo)
+async def handle_receipt(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    topic_key = r.get(f"user:{user_id}:topic")
+    anonymous_id = r.get(f"user:{user_id}:anonymous_id")
+    doctor_id = get_doctor(topic_key)
     
-    if status != "waiting_receipt":
-        await msg.answer("Сначала нажмите «Я оплатил»")
-        return
+    if can_take_new_client(doctor_id):
+        # Врач свободен — подключаем
+        add_active_client(doctor_id, user_id)
+        r.set(f"client:{user_id}:doctor", doctor_id)
+        r.set(f"doctor:{doctor_id}:current_client", user_id)
+        r.set(f"user:{user_id}:active", 1)
+        
+        await bot.send_photo(
+            doctor_id,
+            message.photo[-1].file_id,
+            caption=f"🧾 НОВЫЙ ЧЕК\n"
+                    f"👤 Клиент: {anonymous_id}\n"
+                    f"📂 Тема: {TOPICS[topic_key]}\n\n"
+                    f"✅ Активных консультаций: {get_active_count(doctor_id)}/{MAX_ACTIVE_PER_DOCTOR}",
+            reply_markup=get_doctor_keyboard(user_id)
+        )
+        
+        await bot.send_message(
+            doctor_id,
+            f"💬 Клиент {anonymous_id} подключён. Напишите сообщение."
+        )
+        
+        await message.answer(
+            f"✅ Оплата подтверждена! Врач свяжется с вами.\n"
+            f"Ваш ID: {anonymous_id}"
+        )
+        
+        await state.clear()
+        
+    else:
+        # Врач занят — добавляем в очередь
+        position = add_to_queue(topic_key, user_id, anonymous_id)
+        
+        await bot.send_photo(
+            doctor_id,
+            message.photo[-1].file_id,
+            caption=f"🧾 НОВЫЙ ЧЕК\n"
+                    f"👤 Клиент: {anonymous_id}\n"
+                    f"📂 Тема: {TOPICS[topic_key]}\n\n"
+                    f"⏳ ВРАЧ ЗАНЯТ ({MAX_ACTIVE_PER_DOCTOR}/{MAX_ACTIVE_PER_DOCTOR})\n"
+                    f"Клиент добавлен в очередь. Позиция: {position + 1}"
+        )
+        
+        await message.answer(
+            f"⏳ Врач сейчас ведёт {MAX_ACTIVE_PER_DOCTOR} консультаций.\n"
+            f"Вы в очереди на позиции {position + 1}.\n"
+            f"Как только врач освободится, вы получите уведомление.\n"
+            f"Ваш ID: {anonymous_id}"
+        )
+        
+        r.set(f"user:{user_id}:payment_status", "queued")
+        await state.clear()
+
+# ============================================
+# ПОДТВЕРЖДЕНИЕ ЗАВЕРШЕНИЯ
+# ============================================
+
+@dp.callback_query_handler(lambda c: c.data.startswith("end_confirm:"))
+async def confirm_end_prompt(call: types.CallbackQuery):
+    user_id = int(call.data.split(":")[1])
+    anonymous_id = r.get(f"user:{user_id}:anonymous_id") or "клиент"
     
-    # Получаем тему и врача
-    topic = r.get(f"user:{user_id}:topic")
-    doctor_id = get_doctor(topic)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, завершить", callback_data=f"end:{user_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]
+    ])
     
-    # Сохраняем связи в Redis
-    r.set(f"client:{user_id}:doctor", doctor_id)
-    r.set(f"doctor:{doctor_id}:client", user_id)
-    r.set(f"user:{user_id}:payment_status", "pending_review")
-    
-    # Кнопки для врача (подтвердить/отклонить)
-    kb = types.InlineKeyboardMarkup()
-    kb.add(
-        types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"ok:{user_id}"),
-        types.InlineKeyboardButton("❌ Отклонить", callback_data=f"no:{user_id}")
-    )
-    
-    # Отправляем чек врачу
-    await bot.send_photo(
-        doctor_id,
-        msg.photo[-1].file_id,
-        caption=f"🧾 НОВЫЙ ЧЕК\n"
-                f"👤 Клиент: @{msg.from_user.username or msg.from_user.first_name}\n"
-                f"📂 Тема: {TOPICS[topic]}\n"
-                f"🆔 ID: {user_id}",
+    await call.message.answer(
+        f"⚠️ Вы уверены, что хотите завершить консультацию с {anonymous_id}?\n\n"
+        f"Это действие нельзя отменить.",
         reply_markup=kb
     )
-    
-    await msg.answer("⏳ Чек отправлен врачу на проверку. Ожидайте подтверждения.")
+    await call.answer()
 
 # ============================================
-# 9. ВРАЧ ПОДТВЕРЖДАЕТ ОПЛАТУ
+# ЗАВЕРШЕНИЕ КОНСУЛЬТАЦИИ
 # ============================================
 
-@dp.callback_query_handler(lambda c: c.data.startswith("ok:"))
-async def approve_payment(call: types.CallbackQuery):
+@dp.callback_query_handler(lambda c: c.data.startswith("end:"))
+async def end_consultation(call: types.CallbackQuery):
     user_id = int(call.data.split(":")[1])
+    doctor_id = call.from_user.id
     
-    # Активируем консультацию
-    r.set(f"user:{user_id}:active", 1)
-    r.set(f"user:{user_id}:payment_status", "paid")
+    anonymous_id = r.get(f"user:{user_id}:anonymous_id") or "клиент"
     
-    doctor_id = int(r.get(f"client:{user_id}:doctor"))
+    remove_active_client(doctor_id, user_id)
     
-    # Кнопки для врача во время консультации
-    kb = types.InlineKeyboardMarkup()
-    kb.add(
-        types.InlineKeyboardButton("⏳ Врач скоро ответит", callback_data="busy"),
-        types.InlineKeyboardButton("🔄 Перенаправить", callback_data="transfer"),
-        types.InlineKeyboardButton("❌ Завершить", callback_data="end")
+    r.delete(f"client:{user_id}:doctor")
+    r.delete(f"user:{user_id}:active")
+    r.delete(f"user:{user_id}:payment_status")
+    
+    if r.get(f"doctor:{doctor_id}:current_client") == str(user_id):
+        r.delete(f"doctor:{doctor_id}:current_client")
+    
+    await bot.send_message(
+        user_id,
+        "🏁 Консультация завершена. Спасибо, что обратились к нам!"
     )
     
-    await bot.send_message(user_id, "✅ Оплата подтверждена! Врач скоро свяжется с вами.")
-    await bot.send_message(doctor_id, "💬 Клиент подключён. Напишите сообщение.", reply_markup=kb)
-    
-    await call.answer("Оплата подтверждена")
-
-@dp.callback_query_handler(lambda c: c.data.startswith("no:"))
-async def reject_payment(call: types.CallbackQuery):
-    user_id = int(call.data.split(":")[1])
-    r.set(f"user:{user_id}:payment_status", "rejected")
-    
-    await bot.send_message(user_id, "❌ Оплата не подтверждена. Попробуйте снова /start")
-    await call.answer("Оплата отклонена")
-
-# ============================================
-# 10. УПРАВЛЕНИЕ КОНСУЛЬТАЦИЕЙ (КНОПКИ ВРАЧА)
-# ============================================
-
-@dp.callback_query_handler(lambda c: c.data == "busy")
-async def busy_doctor(call: types.CallbackQuery):
-    doctor_id = call.from_user.id
-    client_id = r.get(f"doctor:{doctor_id}:client")
-    
-    if client_id:
-        await bot.send_message(client_id, "⏳ Врач сейчас занят, ответит в ближайшее время.")
-    await call.answer()
-
-@dp.callback_query_handler(lambda c: c.data == "end")
-async def end_consultation(call: types.CallbackQuery):
-    doctor_id = call.from_user.id
-    client_id = r.get(f"doctor:{doctor_id}:client")
-    
-    if client_id:
-        await bot.send_message(client_id, "🏁 Консультация завершена. Спасибо, что обратились к нам!")
-        await bot.send_message(doctor_id, "✅ Консультация завершена.")
+    topic_key = r.get(f"user:{user_id}:topic")
+    if topic_key:
+        next_client_id, next_anonymous_id = get_next_from_queue(topic_key)
         
-        # Очищаем связи в Redis
-        r.delete(f"doctor:{doctor_id}:client")
-        r.delete(f"client:{client_id}:doctor")
-        r.delete(f"user:{client_id}:active")
+        if next_client_id:
+            add_active_client(doctor_id, next_client_id)
+            r.set(f"client:{next_client_id}:doctor", doctor_id)
+            r.set(f"doctor:{doctor_id}:current_client", next_client_id)
+            r.set(f"user:{next_client_id}:active", 1)
+            r.delete(f"user:{next_client_id}:payment_status")
+            
+            await bot.send_message(
+                next_client_id,
+                f"✅ Врач освободился! Ваша консультация начинается.\n"
+                f"Ваш ID: {next_anonymous_id}"
+            )
+            
+            await bot.send_message(
+                doctor_id,
+                f"💬 Новый клиент {next_anonymous_id} из очереди подключён.\n"
+                f"Активных консультаций: {get_active_count(doctor_id)}/{MAX_ACTIVE_PER_DOCTOR}",
+                reply_markup=get_doctor_keyboard(next_client_id)
+            )
+            
+            await call.message.answer(f"✅ Клиент {next_anonymous_id} из очереди подключён")
+        else:
+            await call.message.answer(f"✅ Консультация с {anonymous_id} завершена. Очередь пуста.")
     
     await call.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "transfer")
-async def transfer_menu(call: types.CallbackQuery):
-    # Показываем меню выбора специалиста для перенаправления
-    kb = types.InlineKeyboardMarkup()
-    for t in TOPICS:
-        kb.add(types.InlineKeyboardButton(TOPICS[t], callback_data=f"to:{t}"))
-    kb.add(types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_transfer"))
+# ============================================
+# ПОДТВЕРЖДЕНИЕ ПЕРЕНАПРАВЛЕНИЯ
+# ============================================
+
+@dp.callback_query_handler(lambda c: c.data.startswith("transfer_confirm:"))
+async def confirm_transfer_prompt(call: types.CallbackQuery):
+    user_id = int(call.data.split(":")[1])
+    anonymous_id = r.get(f"user:{user_id}:anonymous_id") or "клиент"
     
-    await call.message.answer("🔄 Выберите специалиста для перенаправления:", reply_markup=kb)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🦷 Стоматолог", callback_data=f"to:dentistry:{user_id}")],
+        [InlineKeyboardButton(text="🔪 Хирург", callback_data=f"to:surgery:{user_id}")],
+        [InlineKeyboardButton(text="💊 Терапевт", callback_data=f"to:therapy:{user_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]
+    ])
+    
+    await call.message.answer(
+        f"⚠️ Вы хотите перенаправить клиента {anonymous_id}.\n\n"
+        f"Выберите специалиста:",
+        reply_markup=kb
+    )
     await call.answer()
+
+# ============================================
+# ПЕРЕНАПРАВЛЕНИЕ
+# ============================================
 
 @dp.callback_query_handler(lambda c: c.data.startswith("to:"))
 async def do_transfer(call: types.CallbackQuery):
-    new_topic = call.data.split(":")[1]
+    _, new_topic, user_id = call.data.split(":")
+    user_id = int(user_id)
     doctor_id = call.from_user.id
-    client_id = r.get(f"doctor:{doctor_id}:client")
     
-    if not client_id:
-        await call.answer("Клиент не найден")
-        return
-    
+    anonymous_id = r.get(f"user:{user_id}:anonymous_id") or "клиент"
     new_doctor_id = get_doctor(new_topic)
     
-    # Обновляем связи
-    r.set(f"client:{client_id}:doctor", new_doctor_id)
-    r.set(f"doctor:{new_doctor_id}:client", client_id)
-    r.delete(f"doctor:{doctor_id}:client")
+    remove_active_client(doctor_id, user_id)
+    add_active_client(new_doctor_id, user_id)
+    r.set(f"client:{user_id}:doctor", new_doctor_id)
     
-    await bot.send_message(client_id, f"🔄 Вас перенаправили к {TOPICS[new_topic]}. Ожидайте ответа.")
-    await bot.send_message(new_doctor_id, f"🆕 Новый клиент перенаправлен к вам. Тема: {TOPICS[new_topic]}")
-    await call.message.answer(f"✅ Клиент перенаправлен {TOPICS[new_topic]}")
-    await call.answer()
-
-@dp.callback_query_handler(lambda c: c.data == "cancel_transfer")
-async def cancel_transfer(call: types.CallbackQuery):
-    await call.message.edit_text("❌ Перенаправление отменено")
+    if r.get(f"doctor:{doctor_id}:current_client") == str(user_id):
+        r.delete(f"doctor:{doctor_id}:current_client")
+    
+    await bot.send_message(
+        user_id,
+        f"🔄 Вас перенаправили к {TOPICS[new_topic]}. Ожидайте ответа."
+    )
+    await bot.send_message(
+        new_doctor_id,
+        f"🆕 Клиент {anonymous_id} перенаправлен к вам. Тема: {TOPICS[new_topic]}\n"
+        f"Активных консультаций: {get_active_count(new_doctor_id)}/{MAX_ACTIVE_PER_DOCTOR}",
+        reply_markup=get_doctor_keyboard(user_id) if can_take_new_client(new_doctor_id) else None
+    )
+    await call.message.answer(f"✅ Клиент {anonymous_id} перенаправлен {TOPICS[new_topic]}")
     await call.answer()
 
 # ============================================
-# 11. ЧАТ МЕЖДУ КЛИЕНТОМ И ВРАЧОМ
+# КНОПКА "ВРАЧ ЗАНЯТ"
 # ============================================
 
-@dp.message_handler()
-async def chat_messages(msg: types.Message):
-    user_id = msg.from_user.id
+@dp.callback_query_handler(lambda c: c.data.startswith("busy:"))
+async def busy_doctor(call: types.CallbackQuery):
+    user_id = int(call.data.split(":")[1])
+    anonymous_id = r.get(f"user:{user_id}:anonymous_id") or "клиент"
     
-    # Игнорируем служебные сообщения и команды
-    if msg.text in ["✅ Я оплатил"] + list(TOPICS.values()):
+    await bot.send_message(
+        user_id,
+        "⏳ Врач сейчас занят, ответит в ближайшее время."
+    )
+    await call.answer(f"Уведомление отправлено {anonymous_id}")
+
+# ============================================
+# ПОКАЗ СПИСКА АКТИВНЫХ КЛИЕНТОВ (ДЛЯ ВРАЧА)
+# ============================================
+
+@dp.callback_query_handler(lambda c: c.data == "show_clients")
+async def show_clients(call: types.CallbackQuery):
+    doctor_id = call.from_user.id
+    active_clients = r.smembers(f"doctor:{doctor_id}:active_clients")
+    
+    if not active_clients:
+        await call.message.answer("📭 Нет активных консультаций.")
+        await call.answer()
+        return
+    
+    text = "📋 <b>Ваши активные клиенты:</b>\n\n"
+    buttons = []
+    
+    for client_id in active_clients:
+        client_id = int(client_id)
+        anonymous_id = r.get(f"user:{client_id}:anonymous_id") or "клиент"
+        text += f"• {anonymous_id}\n"
+        buttons.append([InlineKeyboardButton(text=f"💬 Переключиться на {anonymous_id}", callback_data=f"switch:{client_id}")])
+    
+    buttons.append([InlineKeyboardButton(text="❌ Закрыть", callback_data="cancel")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+    await call.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await call.answer()
+
+# ============================================
+# ПЕРЕКЛЮЧЕНИЕ МЕЖДУ КЛИЕНТАМИ
+# ============================================
+
+@dp.callback_query_handler(lambda c: c.data.startswith("switch:"))
+async def switch_client(call: types.CallbackQuery):
+    client_id = int(call.data.split(":")[1])
+    doctor_id = call.from_user.id
+    anonymous_id = r.get(f"user:{client_id}:anonymous_id") or "клиент"
+    
+    r.set(f"doctor:{doctor_id}:current_client", client_id)
+    
+    await call.message.answer(
+        f"✅ Вы переключились на клиента {anonymous_id}.\n"
+        f"Теперь все ваши сообщения будут отправлены ему."
+    )
+    await call.answer()
+
+# ============================================
+# ОТМЕНА ДЕЙСТВИЯ
+# ============================================
+
+@dp.callback_query_handler(lambda c: c.data == "cancel")
+async def cancel_action(call: types.CallbackQuery):
+    await call.message.edit_text("❌ Действие отменено.")
+    await call.answer()
+
+# ============================================
+# ЧАТ МЕЖДУ КЛИЕНТОМ И ВРАЧОМ
+# ============================================
+
+@dp.message()
+async def chat_messages(message: types.Message):
+    user_id = message.from_user.id
+    
+    if message.text in ["✅ Я оплатил"] + list(TOPICS.values()):
         return
     
     # Клиент → Врач
     if r.get(f"user:{user_id}:active"):
         doctor_id = r.get(f"client:{user_id}:doctor")
+        anonymous_id = r.get(f"user:{user_id}:anonymous_id") or "клиент"
+        
         if doctor_id:
             await bot.send_message(
-                int(doctor_id), 
-                f"👤 <b>Клиент:</b> {msg.text}", 
-                parse_mode="HTML"
+                int(doctor_id),
+                f"👤 {anonymous_id}: {message.text}",
+                reply_markup=get_doctor_keyboard(user_id)
             )
     
-    # Врач → Клиент
-    elif r.get(f"doctor:{user_id}:client"):
-        client_id = r.get(f"doctor:{user_id}:client")
+    # Врач → Текущий клиент
+    elif r.get(f"doctor:{user_id}:current_client"):
+        client_id = r.get(f"doctor:{user_id}:current_client")
         if client_id:
             await bot.send_message(
-                int(client_id), 
-                f"👨‍⚕️ <b>Врач:</b> {msg.text}", 
-                parse_mode="HTML"
+                int(client_id),
+                f"👨‍⚕️ Врач: {message.text}"
             )
 
 # ============================================
-# 12. ЗАПУСК БОТА
+# УСТАНОВКА КОМАНД В МЕНЮ БОТА
 # ============================================
 
+async def set_commands():
+    commands = [
+        BotCommand(command="start", description="Начать консультацию"),
+        BotCommand(command="clients", description="📋 Мои активные клиенты"),
+    ]
+    await bot.set_my_commands(commands)
+
+# ============================================
+# ЗАПУСК БОТА
+# ============================================
+
+async def main():
+    await set_commands()
+    await dp.start_polling(bot)
+
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
