@@ -613,6 +613,20 @@ class WaitingState(StatesGroup):
     waiting_for_rating_comment = State()
 
 # ============================================
+# КЛАВИАТУРЫ
+# ============================================
+
+def get_client_keyboard():
+    """Клавиатура для клиента (выбор специалиста + Мои консультации)"""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=TOPICS[t]) for t in TOPICS],
+            [KeyboardButton(text="📋 Мои консультации")]
+        ],
+        resize_keyboard=True
+    )
+
+# ============================================
 # КОМАНДЫ
 # ============================================
 
@@ -624,22 +638,23 @@ async def start(message: types.Message, state: FSMContext):
         await safe_send_message(user_id, "⛔ Ваш аккаунт заблокирован.")
         return
     if is_doctor(user_id):
-        await safe_send_message(user_id, "👨‍⚕️ Панель врача", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🟢 Стать онлайн", callback_data="doctor_online")],
-            [InlineKeyboardButton(text="🔴 Стать офлайн", callback_data="doctor_offline")],
-            [InlineKeyboardButton(text="📋 Очередь", callback_data="view_queue")],
-            [InlineKeyboardButton(text="📊 Статус", callback_data="show_status")]
-        ]))
-    else:
-        # КЛИЕНТ: добавили кнопку "Мои консультации"
-        kb = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text=TOPICS[t]) for t in TOPICS],
-                [KeyboardButton(text="📋 Мои консультации")]
-            ],
-            resize_keyboard=True
+        await safe_send_message(
+            user_id,
+            "👨‍⚕️ Панель врача",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🟢 Стать онлайн", callback_data="doctor_online")],
+                [InlineKeyboardButton(text="🔴 Стать офлайн", callback_data="doctor_offline")],
+                [InlineKeyboardButton(text="📋 Очередь", callback_data="view_queue")],
+                [InlineKeyboardButton(text="📊 Статус", callback_data="show_status")]
+            ])
         )
-        await safe_send_message(user_id, "🐾 Добро пожаловать!\nВыберите специалиста:", reply_markup=kb)
+    else:
+        # ТОЛЬКО ДЛЯ КЛИЕНТОВ
+        await safe_send_message(
+            user_id,
+            "🐾 Добро пожаловать!\nВыберите специалиста:",
+            reply_markup=get_client_keyboard()
+        )
 
 @dp.message(Command("online"))
 async def go_online(message: types.Message):
@@ -732,7 +747,6 @@ async def status_command(message: types.Message):
     text += f"👤 Текущий клиент: {current or 'нет'}\n📋 Очередь: {queue_len}"
     await safe_send_message(user_id, text)
 
-# КОМАНДА ДЛЯ КЛИЕНТОВ (доступна только через кнопку или прямой ввод)
 @dp.message(Command("my_consultations"))
 async def my_consultations(message: types.Message):
     user_id = message.from_user.id
@@ -758,7 +772,6 @@ async def my_consultations(message: types.Message):
         text += f"{status_emoji} #{cons[0]} — {cons[1] or 'Врач не назначен'} ({cons[2]}) от {date}\n"
     await safe_send_message(user_id, text, parse_mode="HTML")
 
-# КНОПКА "Мои консультации" для клиента
 @dp.message(F.text == "📋 Мои консультации")
 async def my_consultations_button(message: types.Message):
     await my_consultations(message)
