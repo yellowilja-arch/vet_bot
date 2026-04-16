@@ -8,6 +8,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.exceptions import TelegramForbiddenError
 
 # ============================================
 # НАСТРОЙКИ
@@ -43,6 +44,57 @@ dp = Dispatcher(storage=storage)
 logging.basicConfig(level=logging.INFO)
 
 # ============================================
+# БЕЗОПАСНАЯ ОТПРАВКА СООБЩЕНИЙ
+# ============================================
+
+async def safe_send_message(chat_id, text, **kwargs):
+    """Безопасная отправка сообщения с обработкой блокировки"""
+    try:
+        return await bot.send_message(chat_id, text, **kwargs)
+    except TelegramForbiddenError:
+        print(f"⚠️ Пользователь {chat_id} заблокировал бота")
+        
+        if r.get(f"user:{chat_id}:active"):
+            doctor_id = r.get(f"client:{chat_id}:doctor")
+            if doctor_id:
+                doctor_id = int(doctor_id)
+                r.delete(f"client:{chat_id}:doctor")
+                r.delete(f"user:{chat_id}:active")
+                r.delete(f"user:{chat_id}:payment_status")
+                
+                if get_current_client(doctor_id) == str(chat_id):
+                    set_current_client(doctor_id, None)
+                
+                await safe_send_message(
+                    doctor_id,
+                    f"⚠️ Клиент {r.get(f'user:{chat_id}:anonymous_id') or 'ID ' + str(chat_id)} заблокировал бота.\n"
+                    f"Консультация автоматически завершена.\n\n"
+                    f"Используйте /next для следующего клиента."
+                )
+                
+                topic = r.get(f"doctor:{doctor_id}:topic")
+                if topic and get_queue(topic) > 0:
+                    await safe_send_message(
+                        doctor_id,
+                        f"📋 В очереди {get_queue(topic)} клиент(ов). Используйте /next."
+                    )
+        return None
+    except Exception as e:
+        print(f"Ошибка при отправке сообщения {chat_id}: {e}")
+        return None
+
+async def safe_send_photo(chat_id, photo, caption=None, **kwargs):
+    """Безопасная отправка фото с обработкой блокировки"""
+    try:
+        return await bot.send_photo(chat_id, photo, caption=caption, **kwargs)
+    except TelegramForbiddenError:
+        print(f"⚠️ Пользователь {chat_id} заблокировал бота (фото)")
+        return None
+    except Exception as e:
+        print(f"Ошибка при отправке фото {chat_id}: {e}")
+        return None
+
+# ============================================
 # НАСТРОЙКИ ВРАЧЕЙ
 # ============================================
 
@@ -58,19 +110,13 @@ DOCTORS = {
     "therapy": [1906114179]
 }
 
-# Список всех ID врачей для быстрой проверки
 DOCTOR_IDS = []
 for docs in DOCTORS.values():
     DOCTOR_IDS.extend(docs)
 DOCTOR_IDS = list(set(DOCTOR_IDS))
 
 def is_doctor(user_id):
-    """Проверяет, является ли пользователь врачом"""
     return user_id in DOCTOR_IDS
-
-# ============================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# ============================================
 
 def get_anonymous_id(topic, user_id):
     short_id = str(user_id)[-4:]
@@ -127,7 +173,7 @@ def get_next_from_queue(topic):
     return None, None
 
 # ============================================
-# КЛАВИАТУРЫ ДЛЯ КЛИЕНТОВ
+# КЛАВИАТУРЫ
 # ============================================
 
 def get_main_keyboard():
@@ -135,10 +181,6 @@ def get_main_keyboard():
         keyboard=[[KeyboardButton(text=TOPICS[t])] for t in TOPICS],
         resize_keyboard=True
     )
-
-# ============================================
-# КЛАВИАТУРЫ ДЛЯ ВРАЧЕЙ
-# ============================================
 
 def get_doctor_main_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -182,8 +224,8 @@ async def start(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     
     if is_doctor(user_id):
-        # ВРАЧ: панель управления
-        await message.answer(
+        await safe_send_message(
+            user_id,
             "👨‍⚕️ <b>Панель управления врача</b>\n\n"
             "Используйте кнопки ниже или команды:\n"
             "• /online — стать онлайн\n"
@@ -196,10 +238,9 @@ async def start(message: types.Message, state: FSMContext):
             parse_mode="HTML"
         )
     else:
-        # КЛИЕНТ: выбор специалиста
-        await message.answer(
-            "🐾 Добро пожаловать в онлайн-консультации ветклиники!\n\n"
-            "Выберите специалиста:",
+        await safe_send_message(
+            user_id,
+            "🐾 Добро пожаловать в онлайн-консультации ветклиники!\n\nВыберите специалиста:",
             reply_markup=get_main_keyboard()
         )
 
@@ -207,11 +248,12 @@ async def start(message: types.Message, state: FSMContext):
 async def go_online(message: types.Message):
     user_id = message.from_user.id
     if not is_doctor(user_id):
-        await message.answer("⛔ Эта команда только для врачей.")
+        await safe_send_message(user_id, "⛔ Эта команда только для врачей.")
         return
     
     set_doctor_status(user_id, "online")
-    await message.answer(
+    await safe_send_message(
+        user_id,
         "🟢 Вы стали онлайн. Клиенты могут записываться к вам.",
         reply_markup=get_doctor_main_keyboard()
     )
@@ -220,11 +262,12 @@ async def go_online(message: types.Message):
 async def go_offline(message: types.Message):
     user_id = message.from_user.id
     if not is_doctor(user_id):
-        await message.answer("⛔ Эта команда только для врачей.")
+        await safe_send_message(user_id, "⛔ Эта команда только для врачей.")
         return
     
     set_doctor_status(user_id, "offline")
-    await message.answer(
+    await safe_send_message(
+        user_id,
         "🔴 Вы стали офлайн. Клиенты не будут направляться к вам.",
         reply_markup=get_doctor_main_keyboard()
     )
@@ -233,7 +276,7 @@ async def go_offline(message: types.Message):
 async def show_status(message: types.Message):
     user_id = message.from_user.id
     if not is_doctor(user_id):
-        await message.answer("⛔ Эта команда только для врачей.")
+        await safe_send_message(user_id, "⛔ Эта команда только для врачей.")
         return
     
     status = get_doctor_status(user_id)
@@ -258,18 +301,18 @@ async def show_status(message: types.Message):
         text += f"👤 Текущий клиент: нет\n"
     text += f"📋 В очереди: {queue_length}\n"
     
-    await message.answer(text, parse_mode="HTML", reply_markup=get_doctor_status_keyboard())
+    await safe_send_message(user_id, text, parse_mode="HTML", reply_markup=get_doctor_status_keyboard())
 
 @dp.message(Command("next"))
 async def take_next_client(message: types.Message):
     user_id = message.from_user.id
     if not is_doctor(user_id):
-        await message.answer("⛔ Эта команда только для врачей.")
+        await safe_send_message(user_id, "⛔ Эта команда только для врачей.")
         return
     
     topic = r.get(f"doctor:{user_id}:topic")
     if not topic:
-        await message.answer("❌ Не удалось определить вашу специализацию.")
+        await safe_send_message(user_id, "❌ Не удалось определить вашу специализацию.")
         return
     
     next_client_id, next_anonymous_id = get_next_from_queue(topic)
@@ -278,27 +321,27 @@ async def take_next_client(message: types.Message):
         r.set(f"client:{next_client_id}:doctor", user_id)
         r.set(f"user:{next_client_id}:active", 1)
         
-        await bot.send_message(
+        await safe_send_message(
             next_client_id,
             f"✅ Врач принял вашу заявку! Консультация начинается.\nВаш ID: {next_anonymous_id}"
         )
-        await message.answer(f"✅ Клиент {next_anonymous_id} принят. Напишите сообщение.")
+        await safe_send_message(user_id, f"✅ Клиент {next_anonymous_id} принят. Напишите сообщение.")
     else:
-        await message.answer("📭 Очередь пуста.")
+        await safe_send_message(user_id, "📭 Очередь пуста.")
 
 @dp.message(Command("clients"))
 async def list_active_clients(message: types.Message):
     user_id = message.from_user.id
     if not is_doctor(user_id):
-        await message.answer("⛔ Эта команда только для врачей.")
+        await safe_send_message(user_id, "⛔ Эта команда только для врачей.")
         return
     
     current_client = get_current_client(user_id)
     if current_client:
         anonymous_id = r.get(f"user:{int(current_client)}:anonymous_id") or "клиент"
-        await message.answer(f"👤 Текущий клиент: {anonymous_id}")
+        await safe_send_message(user_id, f"👤 Текущий клиент: {anonymous_id}")
     else:
-        await message.answer("📭 Нет активного клиента.")
+        await safe_send_message(user_id, "📭 Нет активного клиента.")
 
 # ============================================
 # КЛИЕНТ: ВЫБОР СПЕЦИАЛИСТА
@@ -308,9 +351,8 @@ async def list_active_clients(message: types.Message):
 async def choose_topic(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     
-    # Если это врач — игнорируем
     if is_doctor(user_id):
-        await message.answer("👨‍⚕️ Вы врач. Используйте /start для панели управления.")
+        await safe_send_message(user_id, "👨‍⚕️ Вы врач. Используйте /start для панели управления.")
         return
     
     topic_key = None
@@ -327,7 +369,8 @@ async def choose_topic(message: types.Message, state: FSMContext):
             [InlineKeyboardButton(text="✅ Да, я готов ждать", callback_data=f"wait:{topic_key}")],
             [InlineKeyboardButton(text="🔙 Выбрать другого врача", callback_data="back_to_menu")]
         ])
-        await message.answer(
+        await safe_send_message(
+            user_id,
             f"⚠️ {TOPICS[topic_key]} сейчас не может ответить.\n\n"
             f"Вы можете:\n"
             f"• Подождать — мы уведомим вас, когда врач освободится\n"
@@ -345,7 +388,8 @@ async def choose_topic(message: types.Message, state: FSMContext):
     await state.update_data(topic=message.text, anonymous_id=anonymous_id)
     
     kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✅ Я оплатил")]], resize_keyboard=True)
-    await message.answer(
+    await safe_send_message(
+        user_id,
         f"💰 Консультация {message.text} — 500 ₽\n\n"
         f"📞 Оплата по номеру телефона (СБП):\n<code>{PHONE_NUMBER}</code>\n\n"
         f"Ваш ID для консультации: <b>{anonymous_id}</b>\n\n"
@@ -377,7 +421,7 @@ async def wait_for_doctor(call: types.CallbackQuery, state: FSMContext):
     )
     
     doctor_id = get_doctor(topic_key)
-    await bot.send_message(
+    await safe_send_message(
         doctor_id,
         f"🆕 Новый клиент в очереди к {TOPICS[topic_key]}!\n"
         f"Всего в очереди: {get_queue(topic_key)}.\n"
@@ -405,7 +449,7 @@ async def paid_button(message: types.Message, state: FSMContext):
     if is_doctor(user_id):
         return
     
-    await message.answer("📎 Отправьте скриншот или фото чека.")
+    await safe_send_message(user_id, "📎 Отправьте скриншот или фото чека.")
     await state.set_state(PaymentState.waiting_receipt)
 
 @dp.message(PaymentState.waiting_receipt, F.photo)
@@ -419,7 +463,7 @@ async def handle_receipt(message: types.Message, state: FSMContext):
     anonymous_id = r.get(f"user:{user_id}:anonymous_id")
     doctor_id = get_doctor(topic_key)
     
-    await bot.send_photo(
+    await safe_send_photo(
         doctor_id,
         message.photo[-1].file_id,
         caption=f"🧾 НОВЫЙ ЧЕК\n👤 Клиент: {anonymous_id}\n📂 Тема: {TOPICS[topic_key]}\n\n💰 Сумма: 500 ₽",
@@ -429,7 +473,7 @@ async def handle_receipt(message: types.Message, state: FSMContext):
         ])
     )
     
-    await message.answer("✅ Чек отправлен врачу. Ожидайте подтверждения оплаты.")
+    await safe_send_message(user_id, "✅ Чек отправлен врачу. Ожидайте подтверждения оплаты.")
     await state.clear()
 
 # ============================================
@@ -449,7 +493,7 @@ async def accept_payment(call: types.CallbackQuery):
     
     current_client = get_current_client(doctor_id)
     if current_client:
-        await call.message.answer("⚠️ У вас уже есть активный клиент. Завершите текущую консультацию сначала.")
+        await safe_send_message(doctor_id, "⚠️ У вас уже есть активный клиент. Завершите текущую консультацию сначала.")
         await call.answer()
         return
     
@@ -458,7 +502,7 @@ async def accept_payment(call: types.CallbackQuery):
     r.set(f"user:{user_id}:active", 1)
     r.set(f"user:{user_id}:payment_status", "paid")
     
-    await bot.send_message(
+    await safe_send_message(
         user_id,
         f"✅ Оплата подтверждена! Врач принял вашу заявку.\nВаш ID: {anonymous_id}\n\nВрач скоро свяжется с вами."
     )
@@ -479,7 +523,7 @@ async def reject_payment(call: types.CallbackQuery):
         return
     
     user_id = int(call.data.split(":")[1])
-    await bot.send_message(user_id, "❌ Оплата не подтверждена. Пожалуйста, проверьте чек и попробуйте снова.")
+    await safe_send_message(user_id, "❌ Оплата не подтверждена. Пожалуйста, проверьте чек и попробуйте снова.")
     await call.message.edit_text("❌ Оплата отклонена.")
     await call.answer()
 
@@ -552,20 +596,20 @@ async def doctor_view_queue(call: types.CallbackQuery):
     
     topic = r.get(f"doctor:{doctor_id}:topic")
     if not topic:
-        await call.message.answer("❌ Не удалось определить вашу специализацию.")
+        await safe_send_message(doctor_id, "❌ Не удалось определить вашу специализацию.")
         await call.answer()
         return
     
     queue_length = get_queue(topic)
     if queue_length == 0:
-        await call.message.answer("📭 Очередь пуста.")
+        await safe_send_message(doctor_id, "📭 Очередь пуста.")
     else:
         queue_items = r.lrange(f"queue:{topic}", 0, 9)
         text = f"📋 ОЧЕРЕДЬ ({queue_length}):\n\n"
         for i, item in enumerate(queue_items):
             _, anonymous_id = item.split(":")
             text += f"{i+1}. {anonymous_id}\n"
-        await call.message.answer(text)
+        await safe_send_message(doctor_id, text)
     await call.answer()
 
 @dp.callback_query(lambda c: c.data == "end_current")
@@ -578,7 +622,7 @@ async def end_current_prompt(call: types.CallbackQuery):
     
     current_client = get_current_client(doctor_id)
     if not current_client:
-        await call.message.answer("⚠️ Нет активного клиента.")
+        await safe_send_message(doctor_id, "⚠️ Нет активного клиента.")
         await call.answer()
         return
     
@@ -607,7 +651,7 @@ async def end_current_consultation(call: types.CallbackQuery):
         r.delete(f"user:{current_client}:active")
         set_current_client(doctor_id, None)
         
-        await bot.send_message(int(current_client), "🏁 Консультация завершена. Спасибо, что обратились к нам!")
+        await safe_send_message(int(current_client), "🏁 Консультация завершена. Спасибо, что обратились к нам!")
         
         topic = r.get(f"doctor:{doctor_id}:topic")
         if topic:
@@ -623,7 +667,7 @@ async def end_current_consultation(call: types.CallbackQuery):
                     reply_markup=kb
                 )
             else:
-                await call.message.answer(f"✅ Консультация с {anonymous_id} завершена. Очередь пуста.")
+                await safe_send_message(doctor_id, f"✅ Консультация с {anonymous_id} завершена. Очередь пуста.")
     
     await call.answer()
 
@@ -643,13 +687,13 @@ async def take_next_after_end(call: types.CallbackQuery):
         r.set(f"client:{next_client_id}:doctor", doctor_id)
         r.set(f"user:{next_client_id}:active", 1)
         
-        await bot.send_message(
+        await safe_send_message(
             next_client_id,
             f"✅ Врач принял вашу заявку! Консультация начинается.\nВаш ID: {next_anonymous_id}"
         )
-        await call.message.answer(f"✅ Клиент {next_anonymous_id} принят. Напишите сообщение.")
+        await safe_send_message(doctor_id, f"✅ Клиент {next_anonymous_id} принят. Напишите сообщение.")
     else:
-        await call.message.answer("📭 Очередь пуста.")
+        await safe_send_message(doctor_id, "📭 Очередь пуста.")
     
     await call.answer()
 
@@ -688,7 +732,7 @@ async def end_consultation(call: types.CallbackQuery):
     if get_current_client(doctor_id) == str(user_id):
         set_current_client(doctor_id, None)
     
-    await bot.send_message(user_id, "🏁 Консультация завершена. Спасибо, что обратились к нам!")
+    await safe_send_message(user_id, "🏁 Консультация завершена. Спасибо, что обратились к нам!")
     await call.message.answer(f"✅ Консультация с {anonymous_id} завершена.")
     await call.answer()
 
@@ -730,11 +774,11 @@ async def do_transfer(call: types.CallbackQuery):
     if get_current_client(doctor_id) == str(user_id):
         set_current_client(doctor_id, None)
     
-    await bot.send_message(
+    await safe_send_message(
         user_id,
         f"🔄 Вас перенаправили к {TOPICS[new_topic]}. Ожидайте ответа."
     )
-    await bot.send_message(
+    await safe_send_message(
         new_doctor_id,
         f"🆕 Клиент {anonymous_id} перенаправлен к вам. Тема: {TOPICS[new_topic]}"
     )
@@ -747,33 +791,30 @@ async def cancel_action(call: types.CallbackQuery):
     await call.answer()
 
 # ============================================
-# ЧАТ МЕЖДУ КЛИЕНТОМ И ВРАЧОМ
+# ЧАТ
 # ============================================
 
 @dp.message()
 async def chat_messages(message: types.Message):
     user_id = message.from_user.id
     
-    # Игнорируем служебные сообщения от клиентов
     if message.text in ["✅ Я оплатил"] + list(TOPICS.values()):
         return
     
-    # КЛИЕНТ → ВРАЧ
     if r.get(f"user:{user_id}:active"):
         doctor_id = r.get(f"client:{user_id}:doctor")
         anonymous_id = r.get(f"user:{user_id}:anonymous_id") or "клиент"
         if doctor_id:
-            await bot.send_message(
+            await safe_send_message(
                 int(doctor_id),
                 f"👤 {anonymous_id}: {message.text}",
                 reply_markup=get_doctor_actions_keyboard(user_id)
             )
     
-    # ВРАЧ → КЛИЕНТ
     elif is_doctor(user_id):
         current_client = get_current_client(user_id)
         if current_client:
-            await bot.send_message(
+            await safe_send_message(
                 int(current_client),
                 f"👨‍⚕️ Врач: {message.text}"
             )
@@ -784,17 +825,4 @@ async def chat_messages(message: types.Message):
 
 async def set_commands():
     await bot.set_my_commands([
-        BotCommand(command="start", description="Главное меню"),
-        BotCommand(command="online", description="Стать онлайн (врач)"),
-        BotCommand(command="offline", description="Стать офлайн (врач)"),
-        BotCommand(command="status", description="Мой статус (врач)"),
-        BotCommand(command="next", description="Взять следующего клиента (врач)"),
-        BotCommand(command="clients", description="Текущий клиент (врач)"),
-    ])
-
-async def main():
-    await set_commands()
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        BotCommand(command="start", description="Главное
