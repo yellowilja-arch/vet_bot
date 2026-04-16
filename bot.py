@@ -28,7 +28,6 @@ GROUP_ID = os.getenv("GROUP_ID")
 ADMIN_IDS = os.getenv("ADMIN_IDS")
 PHONE_NUMBER = os.getenv("PHONE_NUMBER", "+79256530940")
 
-# Yandex Cloud Object Storage (ТОЛЬКО ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ!)
 YC_ACCESS_KEY_ID = os.getenv("YC_ACCESS_KEY_ID")
 YC_SECRET_ACCESS_KEY = os.getenv("YC_SECRET_ACCESS_KEY")
 YC_BUCKET_NAME = os.getenv("YC_BUCKET_NAME", "vet-bot-backups")
@@ -207,7 +206,7 @@ async def init_db():
     print("✅ База данных SQLite инициализирована")
 
 # ============================================
-# БЕЗОПАСНАЯ ОТПРАВКА (ИСПРАВЛЕННАЯ)
+# БЕЗОПАСНАЯ ОТПРАВКА
 # ============================================
 
 async def safe_send_message(chat_id, text, retries=3, **kwargs):
@@ -283,7 +282,6 @@ async def is_payment_confirmed(consultation_id):
 # ============================================
 
 async def add_to_queue(topic, user_id, anonymous_id):
-    """Добавляет в очередь (SQLite + Redis)"""
     db = await get_db()
     async with _db_lock:
         cursor = await db.execute('''
@@ -298,27 +296,21 @@ async def add_to_queue(topic, user_id, anonymous_id):
     return r.llen(f"queue:{topic}")
 
 async def pop_from_queue(topic):
-    """Извлекает из очереди (Redis + SQLite)"""
     queue_key = f"queue:{topic}"
-    
     item = r.lpop(queue_key)
     if not item:
         return None, None, None
-    
     parts = item.split(":")
     if len(parts) != 3:
         return None, None, None
-    
     user_id = int(parts[0])
     anonymous_id = parts[1]
     queue_id = int(parts[2])
-    
     db = await get_db()
     async with _db_lock:
         await db.execute('UPDATE queue SET status = "processed" WHERE id = ?', (queue_id,))
         await db.commit()
         r.srem(f"queue_set:{topic}", user_id)
-    
     return user_id, anonymous_id, queue_id
 
 async def get_queue_length(topic):
@@ -329,7 +321,6 @@ async def restore_queue_from_db():
     for topic in TOPICS.keys():
         r.delete(f"queue:{topic}")
         r.delete(f"queue_set:{topic}")
-        
         cursor = await db.execute('''
             SELECT user_id, anonymous_id, id FROM queue
             WHERE topic = ? AND status = 'waiting'
@@ -463,7 +454,6 @@ async def save_consultation_start(client_id, anonymous_id, doctor_id, specializa
         ''', (client_id,))
         if await cursor.fetchone():
             return None
-        
         cursor = await db.execute('''
             INSERT INTO consultations 
             (client_id, client_anonymous_id, doctor_id, doctor_specialization, status)
@@ -497,12 +487,10 @@ async def inactivity_worker():
             current_client = get_current_client(doctor_id)
             if not current_client:
                 continue
-            
             doctor_last = r.get(f"doctor:{doctor_id}:last_activity")
             client_last = r.get(f"client:{current_client}:last_activity")
             doctor_inactive = doctor_last and (time.time() - float(doctor_last)) > 600
             client_inactive = client_last and (time.time() - float(client_last)) > 360
-            
             if doctor_inactive and client_inactive:
                 counter_key = f"inactivity_counter:{doctor_id}:{current_client}"
                 counter = r.incr(counter_key)
@@ -540,7 +528,6 @@ def upload_to_yandex(file_path, object_name):
     if not YC_ACCESS_KEY_ID or not YC_SECRET_ACCESS_KEY:
         print("⚠️ Yandex Cloud не настроен: пропускаем бэкап")
         return False
-    
     session = boto3.session.Session()
     client = session.client(
         's3',
@@ -550,7 +537,6 @@ def upload_to_yandex(file_path, object_name):
         region_name='ru-central1',
         config=Config(signature_version='s3v4')
     )
-    
     try:
         client.upload_file(file_path, YC_BUCKET_NAME, object_name)
         print(f"✅ Бэкап {object_name} загружен в Yandex Cloud!")
@@ -562,7 +548,6 @@ def upload_to_yandex(file_path, object_name):
 async def clean_old_backups_from_yandex(max_files=30):
     if not YC_ACCESS_KEY_ID or not YC_SECRET_ACCESS_KEY:
         return 0
-    
     try:
         session = boto3.session.Session()
         client = session.client(
@@ -573,18 +558,15 @@ async def clean_old_backups_from_yandex(max_files=30):
             region_name='ru-central1',
             config=Config(signature_version='s3v4')
         )
-        
         response = client.list_objects_v2(Bucket=YC_BUCKET_NAME)
         if 'Contents' not in response:
             return 0
-        
         objects = sorted(response['Contents'], key=lambda x: x['LastModified'], reverse=True)
         deleted_count = 0
         for obj in objects[max_files:]:
             client.delete_object(Bucket=YC_BUCKET_NAME, Key=obj['Key'])
             print(f"🗑️ Удалён старый бэкап: {obj['Key']}")
             deleted_count += 1
-        
         if deleted_count > 0:
             print(f"✅ Очистка завершена. Удалено {deleted_count} старых бэкапов.")
         return deleted_count
@@ -599,12 +581,9 @@ async def backup_to_yandex():
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             backup_name = f"vet_bot_backup_{timestamp}.db"
             temp_path = f"/tmp/{backup_name}"
-            
             shutil.copy2(DB_PATH, temp_path)
-            
             success = upload_to_yandex(temp_path, backup_name)
             os.remove(temp_path)
-            
             if success:
                 deleted = await clean_old_backups_from_yandex(max_files=30)
                 for admin_id in ADMIN_IDS:
@@ -641,11 +620,9 @@ class WaitingState(StatesGroup):
 async def start(message: types.Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
-    
     if await is_blocked(user_id):
         await safe_send_message(user_id, "⛔ Ваш аккаунт заблокирован.")
         return
-    
     if is_doctor(user_id):
         await safe_send_message(user_id, "👨‍⚕️ Панель врача", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🟢 Стать онлайн", callback_data="doctor_online")],
@@ -654,7 +631,15 @@ async def start(message: types.Message, state: FSMContext):
             [InlineKeyboardButton(text="📊 Статус", callback_data="show_status")]
         ]))
     else:
-        await safe_send_message(user_id, "🐾 Добро пожаловать!\nВыберите специалиста:", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=t) for t in TOPICS.values()]], resize_keyboard=True))
+        # КЛИЕНТ: добавили кнопку "Мои консультации"
+        kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text=TOPICS[t]) for t in TOPICS],
+                [KeyboardButton(text="📋 Мои консультации")]
+            ],
+            resize_keyboard=True
+        )
+        await safe_send_message(user_id, "🐾 Добро пожаловать!\nВыберите специалиста:", reply_markup=kb)
 
 @dp.message(Command("online"))
 async def go_online(message: types.Message):
@@ -682,18 +667,15 @@ async def next_command(message: types.Message):
     if not topic:
         await safe_send_message(user_id, "❌ Не удалось определить специализацию.")
         return
-    
     doctor_lock = f"lock:doctor_pick:{topic}"
     if not r.set(doctor_lock, "1", nx=True, ex=2):
         await safe_send_message(user_id, "⏳ Подождите секунду, обрабатываю...")
         return
-    
     try:
         while True:
             client_id, anonymous_id, queue_id = await pop_from_queue(topic)
             if not client_id:
                 break
-            
             client_lock = f"lock:client_pick:{client_id}"
             if not r.set(client_lock, "1", nx=True, ex=5):
                 db = await get_db()
@@ -702,7 +684,6 @@ async def next_command(message: types.Message):
                 r.rpush(f"queue:{topic}", f"{client_id}:{anonymous_id}:{queue_id}")
                 r.sadd(f"queue_set:{topic}", client_id)
                 continue
-            
             try:
                 consultation_id = None
                 db = await get_db()
@@ -714,14 +695,12 @@ async def next_command(message: types.Message):
                 row = await cursor.fetchone()
                 if row:
                     consultation_id = row[0]
-                
                 if not consultation_id or not await is_payment_confirmed(consultation_id):
                     async with _db_lock:
                         await db.execute('UPDATE queue SET status = "waiting" WHERE id = ?', (queue_id,))
                     r.rpush(f"queue:{topic}", f"{client_id}:{anonymous_id}:{queue_id}")
                     r.sadd(f"queue_set:{topic}", client_id)
                     continue
-                
                 async with _db_lock:
                     await db.execute('''
                         UPDATE consultations 
@@ -729,17 +708,14 @@ async def next_command(message: types.Message):
                         WHERE id = ?
                     ''', (user_id, await get_doctor_name(user_id), consultation_id))
                     await db.commit()
-                
                 set_current_client(user_id, client_id)
                 r.set(f"client:{client_id}:doctor", user_id)
-                
                 await safe_send_message(client_id, f"✅ Врач принял заявку! Ваш ID: {anonymous_id}")
                 await safe_send_message(user_id, f"✅ Клиент {anonymous_id} принят")
                 update_doctor_activity(user_id)
                 return
             finally:
                 r.delete(client_lock)
-        
         await safe_send_message(user_id, "📭 Нет клиентов с подтверждённой оплатой")
     finally:
         r.delete(doctor_lock)
@@ -756,13 +732,13 @@ async def status_command(message: types.Message):
     text += f"👤 Текущий клиент: {current or 'нет'}\n📋 Очередь: {queue_len}"
     await safe_send_message(user_id, text)
 
+# КОМАНДА ДЛЯ КЛИЕНТОВ (доступна только через кнопку или прямой ввод)
 @dp.message(Command("my_consultations"))
 async def my_consultations(message: types.Message):
     user_id = message.from_user.id
     if is_doctor(user_id):
         await safe_send_message(user_id, "⛔ Эта команда только для клиентов.")
         return
-    
     db = await get_db()
     cursor = await db.execute('''
         SELECT id, doctor_name, doctor_specialization, status, created_at
@@ -772,23 +748,24 @@ async def my_consultations(message: types.Message):
         LIMIT 10
     ''', (user_id,))
     consultations = await cursor.fetchall()
-    
     if not consultations:
         await safe_send_message(user_id, "📭 У вас пока нет консультаций.")
         return
-    
     text = "📋 <b>Ваши консультации</b>\n\n"
     for cons in consultations:
         status_emoji = "✅" if cons[3] == "ended" else "⚠️" if cons[3] == "auto_ended" else "⏳"
         date = cons[4][:10] if cons[4] else "дата неизвестна"
         text += f"{status_emoji} #{cons[0]} — {cons[1] or 'Врач не назначен'} ({cons[2]}) от {date}\n"
-    
     await safe_send_message(user_id, text, parse_mode="HTML")
+
+# КНОПКА "Мои консультации" для клиента
+@dp.message(F.text == "📋 Мои консультации")
+async def my_consultations_button(message: types.Message):
+    await my_consultations(message)
 
 @dp.message(Command("end"))
 async def end_consultation_command(message: types.Message):
     user_id = message.from_user.id
-    
     if is_doctor(user_id):
         current_client = get_current_client(user_id)
         if current_client:
@@ -805,7 +782,6 @@ async def end_consultation_command(message: types.Message):
             await safe_send_message(int(current_client), "🔚 Врач завершил консультацию.")
             await safe_send_message(user_id, "✅ Консультация завершена")
         return
-    
     if await is_client_active(user_id):
         db = await get_db()
         cursor = await db.execute('''
@@ -828,26 +804,20 @@ async def end_consultation_command(message: types.Message):
 @dp.message(F.text.in_(list(TOPICS.values())))
 async def select_topic(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    
     if await is_blocked(user_id):
         await safe_send_message(user_id, "⛔ Ваш аккаунт заблокирован.")
         return
-    
     if await has_active_consultation(user_id):
         await safe_send_message(user_id, "⚠️ У вас уже есть активная консультация!")
         return
-    
     topic_key = None
     for key, value in TOPICS.items():
         if value == message.text:
             topic_key = key
             break
-    
     anonymous_id = get_anonymous_id(topic_key, user_id)
     queue_position = await add_to_queue(topic_key, user_id, anonymous_id)
-    
     consultation_id = await save_consultation_start(user_id, anonymous_id, None, topic_key)
-    
     await safe_send_message(
         user_id,
         f"✅ Вы добавлены в очередь к {message.text}\n"
@@ -870,7 +840,6 @@ async def select_topic(message: types.Message, state: FSMContext):
 async def process_payment_button(call: types.CallbackQuery, state: FSMContext):
     topic_key = call.data.split("_")[1]
     user_id = call.from_user.id
-    
     await safe_send_message(user_id, "📎 Отправьте скриншот или фото чека.")
     await state.update_data(payment_topic=topic_key)
     await state.set_state(PaymentState.waiting_receipt)
@@ -882,12 +851,10 @@ async def handle_receipt(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     data = await state.get_data()
     topic_key = data.get("payment_topic")
-    
     if not topic_key:
         await safe_send_message(user_id, "❌ Ошибка: не выбрана тема. Начните заново с /start")
         await state.clear()
         return
-    
     db = await get_db()
     cursor = await db.execute('''
         SELECT id FROM consultations 
@@ -896,27 +863,22 @@ async def handle_receipt(message: types.Message, state: FSMContext):
     ''', (user_id,))
     row = await cursor.fetchone()
     consultation_id = row[0] if row else None
-    
     if not consultation_id:
         await safe_send_message(user_id, "❌ Ошибка: консультация не найдена.")
         await state.clear()
         return
-    
     anonymous_id = get_anonymous_id(topic_key, user_id)
-    
     await db.execute('''
         INSERT INTO payments (client_id, consultation_id, amount, status, receipt_file_id)
         VALUES (?, ?, 500, "pending", ?)
     ''', (user_id, consultation_id, message.photo[-1].file_id))
     await db.commit()
-    
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"confirm_payment:{user_id}"),
             InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_payment:{user_id}")
         ]
     ])
-    
     doctor_id = get_doctor(topic_key)
     if doctor_id:
         await safe_send_photo(
@@ -925,7 +887,6 @@ async def handle_receipt(message: types.Message, state: FSMContext):
             caption=f"🧾 Чек от клиента {anonymous_id}\nТема: {TOPICS[topic_key]}",
             reply_markup=keyboard
         )
-    
     await safe_send_message(user_id, "✅ Чек отправлен врачу. Ожидайте подтверждения.")
     await state.clear()
     r.delete(f"fsm_timeout:{user_id}:waiting_receipt")
@@ -935,37 +896,29 @@ async def confirm_payment(call: types.CallbackQuery):
     doctor_id = call.from_user.id
     if not is_doctor(doctor_id):
         return await call.answer("⛔ Только для врачей")
-    
     client_id = int(call.data.split(":")[1])
-    
     db = await get_db()
-    
     cursor = await db.execute('''
         SELECT id, consultation_id FROM payments
         WHERE client_id = ? AND status = "pending"
         ORDER BY id DESC LIMIT 1
     ''', (client_id,))
     row = await cursor.fetchone()
-    
     if not row:
         return await call.answer("Платёж не найден")
-    
     payment_id, consultation_id = row
-    
     cursor = await db.execute('''
         SELECT status FROM payments
         WHERE client_id = ? AND status = "confirmed"
     ''', (client_id,))
     if await cursor.fetchone():
         return await call.answer("Оплата уже подтверждена")
-    
     await db.execute('''
         UPDATE payments 
         SET status = "confirmed", confirmed_at = CURRENT_TIMESTAMP
         WHERE id = ?
     ''', (payment_id,))
     await db.commit()
-    
     if consultation_id:
         await db.execute('''
             UPDATE consultations SET status = 'paid', payment_confirmed = 1
@@ -973,7 +926,6 @@ async def confirm_payment(call: types.CallbackQuery):
         ''', (consultation_id,))
         await db.commit()
         r.setex(f"payment:confirmed:{consultation_id}", 3600, "1")
-    
     await safe_send_message(client_id, "✅ Оплата подтверждена! Ожидайте врача.")
     await call.message.edit_caption(call.message.caption + "\n\n✅ Оплата подтверждена")
     await call.answer("Подтверждено")
@@ -983,9 +935,7 @@ async def reject_payment(call: types.CallbackQuery):
     doctor_id = call.from_user.id
     if not is_doctor(doctor_id):
         return await call.answer("⛔ Только для врачей")
-    
     client_id = int(call.data.split(":")[1])
-    
     db = await get_db()
     await db.execute('''
         UPDATE payments 
@@ -993,7 +943,6 @@ async def reject_payment(call: types.CallbackQuery):
         WHERE client_id = ? AND status = "pending"
     ''', (client_id,))
     await db.commit()
-    
     await safe_send_message(client_id, "❌ Оплата отклонена. Попробуйте снова.")
     await call.message.edit_caption(call.message.caption + "\n\n❌ Оплата отклонена")
     await call.answer("Отклонено")
@@ -1005,13 +954,10 @@ async def reject_payment(call: types.CallbackQuery):
 @dp.message()
 async def chat_messages(message: types.Message):
     user_id = message.from_user.id
-    
     if await is_blocked(user_id):
         return
-    
-    if message.text in ["✅ Я оплатил"] + list(TOPICS.values()):
+    if message.text in ["✅ Я оплатил"] + list(TOPICS.values()) + ["📋 Мои консультации"]:
         return
-    
     if await is_client_active(user_id):
         doctor_id = r.get(f"client:{user_id}:doctor")
         if not doctor_id:
@@ -1024,7 +970,6 @@ async def chat_messages(message: types.Message):
             if row and row[0]:
                 doctor_id = str(row[0])
                 r.set(f"client:{user_id}:doctor", doctor_id)
-        
         if doctor_id:
             anonymous_id = get_anonymous_id(
                 r.get(f"doctor:{int(doctor_id)}:topic") or "therapy",
@@ -1039,7 +984,6 @@ async def chat_messages(message: types.Message):
             else:
                 await safe_send_message(int(doctor_id), f"👤 {anonymous_id}: {message.text}")
             update_client_activity(user_id)
-    
     elif is_doctor(user_id):
         current_client = get_current_client(user_id)
         if current_client:
@@ -1176,13 +1120,10 @@ async def admin_stats(message: types.Message):
 
 async def restore_state():
     db = await get_db()
-    
     for topic in TOPICS.keys():
         r.delete(f"queue:{topic}")
         r.delete(f"queue_set:{topic}")
-    
     await restore_queue_from_db()
-    
     cursor = await db.execute('''
         SELECT id, client_id, doctor_id FROM consultations 
         WHERE status = "active"
@@ -1195,7 +1136,6 @@ async def restore_state():
             if not r.get(f"client:{client_id}:doctor"):
                 r.set(f"client:{client_id}:doctor", doctor_id)
         print(f"🔄 Восстановлена консультация #{consultation_id}")
-    
     cursor = await db.execute('''
         SELECT DISTINCT consultation_id FROM payments 
         WHERE status = "confirmed"
@@ -1204,14 +1144,12 @@ async def restore_state():
         if consultation_id:
             r.setex(f"payment:confirmed:{consultation_id}", 3600, "1")
             print(f"🔄 Восстановлен кэш оплаты для консультации #{consultation_id}")
-    
     for doctor_id in DOCTOR_IDS:
         last_activity = r.get(f"doctor:{doctor_id}:last_activity")
         if last_activity and (time.time() - float(last_activity)) < 300:
             set_doctor_status(doctor_id, "online")
         else:
             set_doctor_status(doctor_id, "offline")
-    
     print(f"🔄 Восстановление завершено")
 
 # ============================================
@@ -1225,7 +1163,6 @@ async def set_commands():
         BotCommand(command="offline", description="Стать офлайн (врач)"),
         BotCommand(command="status", description="Мой статус (врач)"),
         BotCommand(command="next", description="Взять следующего (врач)"),
-        BotCommand(command="my_consultations", description="Мои консультации"),
         BotCommand(command="end", description="Завершить консультацию"),
         BotCommand(command="ban", description="Заблокировать (админ)"),
         BotCommand(command="unban", description="Разблокировать (админ)"),
