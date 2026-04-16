@@ -50,7 +50,7 @@ logging.basicConfig(level=logging.INFO)
 async def safe_send_message(chat_id, text, **kwargs):
     """Безопасная отправка сообщения с обработкой блокировки"""
     try:
-        return await bot.send_message(chat_id, text, **kwargs)
+        return await safe_send_message(chat_id, text, **kwargs)
     except TelegramForbiddenError:
         print(f"⚠️ Пользователь {chat_id} заблокировал бота")
         
@@ -86,7 +86,7 @@ async def safe_send_message(chat_id, text, **kwargs):
 async def safe_send_photo(chat_id, photo, caption=None, **kwargs):
     """Безопасная отправка фото с обработкой блокировки"""
     try:
-        return await bot.send_photo(chat_id, photo, caption=caption, **kwargs)
+        return await safe_send_photo(chat_id, photo, caption=caption, **kwargs)
     except TelegramForbiddenError:
         print(f"⚠️ Пользователь {chat_id} заблокировал бота (фото)")
         return None
