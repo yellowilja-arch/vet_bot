@@ -132,7 +132,6 @@ async def init_db():
             payment_confirmed BOOLEAN DEFAULT 0
         )
     ''')
-    # Уникальный индекс для активных консультаций (защита от дублей)
     await db.execute('''
         CREATE UNIQUE INDEX IF NOT EXISTS idx_active_client
         ON consultations(client_id) WHERE status = 'active'
@@ -208,7 +207,7 @@ async def init_db():
     print("✅ База данных SQLite инициализирована")
 
 # ============================================
-# БЕЗОПАСНАЯ ОТПРАВКА
+# БЕЗОПАСНАЯ ОТПРАВКА (ИСПРАВЛЕННАЯ)
 # ============================================
 
 async def safe_send_message(chat_id, text, retries=3, **kwargs):
@@ -229,7 +228,7 @@ async def safe_send_message(chat_id, text, retries=3, **kwargs):
         if retries <= 0:
             return None
         await asyncio.sleep(e.retry_after)
-        return await safe_send_message(chat_id, text, retries - 1, **kwargs)
+        return await safe_send_message(chat_id, text, retries=retries - 1, **kwargs)
     except Exception as e:
         print(f"Ошибка: {e}")
         return None
@@ -243,7 +242,7 @@ async def safe_send_photo(chat_id, photo, caption=None, retries=3, **kwargs):
         if retries <= 0:
             return None
         await asyncio.sleep(e.retry_after)
-        return await safe_send_photo(chat_id, photo, caption=caption, retries - 1, **kwargs)
+        return await safe_send_photo(chat_id, photo, caption=caption, retries=retries - 1, **kwargs)
     except Exception as e:
         print(f"Ошибка: {e}")
         return None
@@ -294,7 +293,6 @@ async def add_to_queue(topic, user_id, anonymous_id):
         await db.commit()
         queue_id = cursor.lastrowid
     
-    # Кэш в Redis
     r.rpush(f"queue:{topic}", f"{user_id}:{anonymous_id}:{queue_id}")
     r.sadd(f"queue_set:{topic}", user_id)
     return r.llen(f"queue:{topic}")
@@ -303,7 +301,6 @@ async def pop_from_queue(topic):
     """Извлекает из очереди (Redis + SQLite)"""
     queue_key = f"queue:{topic}"
     
-    # Пытаемся взять из Redis
     item = r.lpop(queue_key)
     if not item:
         return None, None, None
@@ -316,7 +313,6 @@ async def pop_from_queue(topic):
     anonymous_id = parts[1]
     queue_id = int(parts[2])
     
-    # Отмечаем в SQLite как обработанный
     db = await get_db()
     async with _db_lock:
         await db.execute('UPDATE queue SET status = "processed" WHERE id = ?', (queue_id,))
@@ -326,18 +322,14 @@ async def pop_from_queue(topic):
     return user_id, anonymous_id, queue_id
 
 async def get_queue_length(topic):
-    """Длина очереди (из Redis)"""
     return r.llen(f"queue:{topic}")
 
 async def restore_queue_from_db():
-    """Восстанавливает очередь из SQLite при старте"""
     db = await get_db()
     for topic in TOPICS.keys():
-        # Очищаем Redis
         r.delete(f"queue:{topic}")
         r.delete(f"queue_set:{topic}")
         
-        # Загружаем из SQLite
         cursor = await db.execute('''
             SELECT user_id, anonymous_id, id FROM queue
             WHERE topic = ? AND status = 'waiting'
@@ -465,7 +457,6 @@ async def has_active_consultation(client_id):
 async def save_consultation_start(client_id, anonymous_id, doctor_id, specialization):
     db = await get_db()
     async with _db_lock:
-        # Проверка на активную консультацию (уникальный индекс защитит, но проверим явно)
         cursor = await db.execute('''
             SELECT id FROM consultations 
             WHERE client_id = ? AND status = "active"
@@ -496,7 +487,7 @@ async def save_consultation_end(consultation_id, status, client_msgs=0, doctor_m
         await db.commit()
 
 # ============================================
-# ФОНОВЫЙ ВОРКЕР ТАЙМАУТОВ (с grace period)
+# ФОНОВЫЙ ВОРКЕР ТАЙМАУТОВ
 # ============================================
 
 async def inactivity_worker():
@@ -513,10 +504,9 @@ async def inactivity_worker():
             client_inactive = client_last and (time.time() - float(client_last)) > 360
             
             if doctor_inactive and client_inactive:
-                # Счётчик бездействия для защиты от ложных срабатываний
                 counter_key = f"inactivity_counter:{doctor_id}:{current_client}"
                 counter = r.incr(counter_key)
-                if counter >= 3:  # 3 проверки подряд (90 секунд)
+                if counter >= 3:
                     consultation_id = None
                     db = await get_db()
                     cursor = await db.execute('''
@@ -547,7 +537,6 @@ async def inactivity_worker():
 # ============================================
 
 def upload_to_yandex(file_path, object_name):
-    """Загружает файл в Yandex Object Storage"""
     if not YC_ACCESS_KEY_ID or not YC_SECRET_ACCESS_KEY:
         print("⚠️ Yandex Cloud не настроен: пропускаем бэкап")
         return False
@@ -571,7 +560,6 @@ def upload_to_yandex(file_path, object_name):
         return False
 
 async def clean_old_backups_from_yandex(max_files=30):
-    """Удаляет старые бэкапы из Yandex Cloud, оставляя только последние max_files"""
     if not YC_ACCESS_KEY_ID or not YC_SECRET_ACCESS_KEY:
         return 0
     
@@ -605,15 +593,13 @@ async def clean_old_backups_from_yandex(max_files=30):
         return 0
 
 async def backup_to_yandex():
-    """Фоновая задача: раз в сутки бэкапим БД в Yandex Cloud"""
     while True:
-        await asyncio.sleep(86400)  # 24 часа
+        await asyncio.sleep(86400)
         try:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             backup_name = f"vet_bot_backup_{timestamp}.db"
             temp_path = f"/tmp/{backup_name}"
             
-            # Копируем файл БД (VACUUM INTO не работает в aiosqlite)
             shutil.copy2(DB_PATH, temp_path)
             
             success = upload_to_yandex(temp_path, backup_name)
@@ -710,7 +696,6 @@ async def next_command(message: types.Message):
             
             client_lock = f"lock:client_pick:{client_id}"
             if not r.set(client_lock, "1", nx=True, ex=5):
-                # Возвращаем в очередь
                 db = await get_db()
                 async with _db_lock:
                     await db.execute('UPDATE queue SET status = "waiting" WHERE id = ?', (queue_id,))
@@ -731,7 +716,6 @@ async def next_command(message: types.Message):
                     consultation_id = row[0]
                 
                 if not consultation_id or not await is_payment_confirmed(consultation_id):
-                    # Возвращаем в очередь
                     async with _db_lock:
                         await db.execute('UPDATE queue SET status = "waiting" WHERE id = ?', (queue_id,))
                     r.rpush(f"queue:{topic}", f"{client_id}:{anonymous_id}:{queue_id}")
@@ -1193,15 +1177,12 @@ async def admin_stats(message: types.Message):
 async def restore_state():
     db = await get_db()
     
-    # Очищаем Redis перед восстановлением
     for topic in TOPICS.keys():
         r.delete(f"queue:{topic}")
         r.delete(f"queue_set:{topic}")
     
-    # Восстанавливаем очередь из SQLite
     await restore_queue_from_db()
     
-    # Восстанавливаем активные консультации
     cursor = await db.execute('''
         SELECT id, client_id, doctor_id FROM consultations 
         WHERE status = "active"
@@ -1215,7 +1196,6 @@ async def restore_state():
                 r.set(f"client:{client_id}:doctor", doctor_id)
         print(f"🔄 Восстановлена консультация #{consultation_id}")
     
-    # Восстанавливаем кэш подтверждённых оплат
     cursor = await db.execute('''
         SELECT DISTINCT consultation_id FROM payments 
         WHERE status = "confirmed"
@@ -1225,7 +1205,6 @@ async def restore_state():
             r.setex(f"payment:confirmed:{consultation_id}", 3600, "1")
             print(f"🔄 Восстановлен кэш оплаты для консультации #{consultation_id}")
     
-    # Восстанавливаем статусы врачей
     for doctor_id in DOCTOR_IDS:
         last_activity = r.get(f"doctor:{doctor_id}:last_activity")
         if last_activity and (time.time() - float(last_activity)) < 300:
