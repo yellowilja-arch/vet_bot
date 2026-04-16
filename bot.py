@@ -50,7 +50,7 @@ logging.basicConfig(level=logging.INFO)
 async def safe_send_message(chat_id, text, **kwargs):
     """Безопасная отправка сообщения с обработкой блокировки"""
     try:
-        return await safe_send_message(chat_id, text, **kwargs)
+        return await bot.send_message(chat_id, text, **kwargs)
     except TelegramForbiddenError:
         print(f"⚠️ Пользователь {chat_id} заблокировал бота")
         
@@ -86,7 +86,7 @@ async def safe_send_message(chat_id, text, **kwargs):
 async def safe_send_photo(chat_id, photo, caption=None, **kwargs):
     """Безопасная отправка фото с обработкой блокировки"""
     try:
-        return await safe_send_photo(chat_id, photo, caption=caption, **kwargs)
+        return await bot.send_photo(chat_id, photo, caption=caption, **kwargs)
     except TelegramForbiddenError:
         print(f"⚠️ Пользователь {chat_id} заблокировал бота (фото)")
         return None
@@ -825,4 +825,17 @@ async def chat_messages(message: types.Message):
 
 async def set_commands():
     await bot.set_my_commands([
-        BotCommand(command="start", description="Главное
+        BotCommand(command="start", description="Главное меню"),
+        BotCommand(command="online", description="Стать онлайн (врач)"),
+        BotCommand(command="offline", description="Стать офлайн (врач)"),
+        BotCommand(command="status", description="Мой статус (врач)"),
+        BotCommand(command="next", description="Взять следующего клиента (врач)"),
+        BotCommand(command="clients", description="Текущий клиент (врач)"),
+    ])
+
+async def main():
+    await set_commands()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
