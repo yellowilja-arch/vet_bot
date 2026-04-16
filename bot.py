@@ -105,11 +105,12 @@ TOPICS = {
 }
 
 DOCTORS = {
-    "dentistry": [1092230808],
-    "surgery": [222222222],
-    "therapy": [1906114179]
+    "dentistry": [1092230808],   # 👈 ВАШ ID (стоматолог)
+    "surgery": [222222222],      # 👈 ЗАМЕНИТЕ на ID хирурга
+    "therapy": [1906114179]      # 👈 Терапевт
 }
 
+# Автоматически собираем список всех врачей
 DOCTOR_IDS = []
 for docs in DOCTORS.values():
     DOCTOR_IDS.extend(docs)
@@ -171,6 +172,21 @@ def get_next_from_queue(topic):
         user_id, anonymous_id = next_client.split(":")
         return int(user_id), anonymous_id
     return None, None
+
+# ============================================
+# АВТОМАТИЧЕСКАЯ НАСТРОЙКА СПЕЦИАЛИЗАЦИИ ВРАЧЕЙ
+# ============================================
+
+for topic_name, doctor_ids in DOCTORS.items():
+    for doctor_id in doctor_ids:
+        if not r.get(f"doctor:{doctor_id}:topic"):
+            r.set(f"doctor:{doctor_id}:topic", topic_name)
+            print(f"✅ Установлена специализация {TOPICS[topic_name]} для врача {doctor_id}")
+
+print(f"📋 Всего врачей в системе: {len(DOCTOR_IDS)}")
+for doctor_id in DOCTOR_IDS:
+    topic = r.get(f"doctor:{doctor_id}:topic")
+    print(f"   • {doctor_id} → {TOPICS.get(topic, 'не назначена')}")
 
 # ============================================
 # КЛАВИАТУРЫ
@@ -282,13 +298,6 @@ async def show_status(message: types.Message):
     status = get_doctor_status(user_id)
     current_client = get_current_client(user_id)
     topic = r.get(f"doctor:{user_id}:topic")
-    if not topic:
-        for t, doc_list in DOCTORS.items():
-            if user_id in doc_list:
-                topic = t
-                r.set(f"doctor:{user_id}:topic", topic)
-                break
-    
     queue_length = get_queue(topic) if topic else 0
     
     text = f"📊 <b>Ваш статус:</b>\n\n"
