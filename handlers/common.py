@@ -13,7 +13,3 @@ async def start_command(message: Message):
     await message.answer("start works")
 
 
-@router.message()
-async def debug_all(message: Message):
-    print(f"🔍 DEBUG: {message.text}")
-    await message.answer(f"DEBUG: {message.text}")
