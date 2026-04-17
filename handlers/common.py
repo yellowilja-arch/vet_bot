@@ -16,7 +16,7 @@ r = redis.from_url(REDIS_URL, decode_responses=True)
 router = Router()
 
 
-# ДИАГНОСТИКА: тестовая команда /stats
+# ТЕСТОВАЯ КОМАНДА /stats
 @router.message(Command("stats"))
 async def stats_test(message: Message):
     await message.answer("✅ stats работает!")
