@@ -8,3 +8,5 @@ def register_handlers(dp):
     dp.include_router(client_router)
     dp.include_router(doctor_router)
     dp.include_router(admin_router)
+    import logging
+    logging.info("✅ Handlers registered")
