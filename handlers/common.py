@@ -56,11 +56,9 @@ async def fix_me(message: Message):
     r.set(f"doctor:222222222:topic", "surgery")
     r.set(f"doctor:1906114179:topic", "therapy")
     
-    from services.validators import DOCTOR_IDS
-    await message.answer(f"✅ Врачи добавлены! DOCTOR_IDS: {DOCTOR_IDS}")@router.message(Command("testdoc"))
-async def test_doc_common(message: Message):
-    await message.answer("testdoc from common")
-
+    # ПРЯМАЯ ПРОВЕРКА из database.doctors
+    from database.doctors import DOCTOR_IDS
+    await message.answer(f"✅ Врачи добавлены! DOCTOR_IDS: {DOCTOR_IDS}")
 
 @router.message(Command("stats"))
 async def stats_command(message: Message):
