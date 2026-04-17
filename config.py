@@ -9,6 +9,9 @@ GROUP_ID = os.getenv("GROUP_ID")
 ADMIN_IDS = [1092230808]  # Временная установка для тестирования
 PHONE_NUMBER = os.getenv("PHONE_NUMBER", "+79256530940")
 
+# Railway PORT
+PORT = int(os.getenv("PORT", 8080))
+
 # Yandex Cloud (бэкапы)
 YC_ACCESS_KEY_ID = os.getenv("YC_ACCESS_KEY_ID")
 YC_SECRET_ACCESS_KEY = os.getenv("YC_SECRET_ACCESS_KEY")

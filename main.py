@@ -3,14 +3,15 @@ import signal
 import sys
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
-from config import BOT_TOKEN, ADMIN_IDS, REDIS_URL
+from config import BOT_TOKEN, ADMIN_IDS, REDIS_URL, PORT
 from handlers import register_handlers
 from workers.backups import backup_worker
 from workers.inactivity import inactivity_worker
 from utils.helpers import safe_send_message
 from database.db import get_db
 import logging
-import redis
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 
@@ -41,6 +42,7 @@ async def init_startup():
     await load_doctors_from_db()
     
     # Восстановление активных консультаций
+    import redis
     r = redis.from_url(REDIS_URL, decode_responses=True)
     db = await get_db()
     cursor = await db.execute('SELECT client_id, doctor_id, id FROM consultations WHERE status = "active"')
@@ -61,6 +63,22 @@ async def main():
     asyncio.create_task(backup_worker())
     asyncio.create_task(inactivity_worker())
     
+    # Webhook setup
+    await bot.set_webhook(f"https://your-railway-url.up.railway.app/webhook")  # Замените на ваш URL Railway
+    
+    # Создание веб-приложения
+    app = web.Application()
+    webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_handler.register(app, path="/webhook")
+    
+    # Запуск сервера
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    
+    logging.info(f"🚀 Бот запущен на порту {PORT} с webhook")
+    
     # Graceful shutdown
     def signal_handler(signum, frame):
         logging.info("Получен сигнал завершения, останавливаем бота...")
@@ -69,11 +87,10 @@ async def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
+    # Держим приложение запущенным
     try:
-        await dp.start_polling(bot)
-    except Exception as e:
-        logging.error(f"Ошибка в polling: {e}")
-    finally:
+        await asyncio.Future()  # Бесконечный цикл
+    except KeyboardInterrupt:
         await shutdown()
 
 async def shutdown():
