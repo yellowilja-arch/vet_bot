@@ -1,5 +1,6 @@
 import asyncio
 import aiosqlite
+import logging
 from config import DB_PATH
 
 _db_pool = None
@@ -16,6 +17,7 @@ async def get_db():
             try:
                 await _db_pool.execute("SELECT 1")
             except:
+                logging.error("Database connection lost, reconnecting...")
                 _db_pool = await aiosqlite.connect(DB_PATH)
                 await _db_pool.execute("PRAGMA journal_mode=WAL")
                 await _db_pool.execute("PRAGMA busy_timeout=5000")

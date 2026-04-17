@@ -273,3 +273,30 @@ async def back_to_menu(call: CallbackQuery, state: FSMContext):
     await state.clear()
     await call.message.edit_text("🐾 Выберите специалиста:", reply_markup=get_client_main_keyboard())
     await call.answer()
+
+# ============================================
+# ОЦЕНКА ВРАЧА
+# ============================================
+
+@router.callback_query(lambda c: c.data.startswith("rate:"))
+async def rate_doctor(call: CallbackQuery):
+    data = call.data.split(":")
+    consultation_id = int(data[1])
+    doctor_id = int(data[2])
+    rating = int(data[3])
+    
+    from database.db import get_db
+    db = await get_db()
+    await db.execute('''
+        INSERT INTO doctor_ratings (doctor_id, client_id, consultation_id, rating)
+        VALUES (?, ?, ?, ?)
+    ''', (doctor_id, call.from_user.id, consultation_id, rating))
+    await db.commit()
+    
+    await call.message.edit_text(f"Спасибо за оценку! Вы поставили {rating} ⭐")
+    await call.answer()
+
+@router.callback_query(lambda c: c.data == "skip_rating")
+async def skip_rating(call: CallbackQuery):
+    await call.message.edit_text("Оценка пропущена.")
+    await call.answer()

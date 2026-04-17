@@ -18,14 +18,6 @@ from config import REDIS_URL
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
 router = Router()
-@router.message(Command("stats"))
-async def admin_stats(message: Message):
-    await message.answer("📊 stats из admin.py")
-
-# ============================================
-# ОСНОВНЫЕ АДМИН-КОМАНДЫ
-# ============================================
-
 @router.message(Command("ban"))
 async def ban_user(message: Message):
     user_id = message.from_user.id
@@ -70,18 +62,32 @@ async def unban_user(message: Message):
 @router.message(Command("stats"))
 async def admin_stats(message: Message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
+    import logging
+    logging.info(f"🔍 /stats: user_id={user_id}, ADMIN_IDS={ADMIN_IDS}, in_admin={user_id in ADMIN_IDS}")
+    
+    # Отправляем ответ ВСЕ РАВНО, чтобы проверить, вызывается ли обработчик
+    if not ADMIN_IDS:
+        await safe_send_message(user_id, "❌ ADMIN_IDS пуст! Установите ADMIN_IDS в .env")
+        logging.error("ADMIN_IDS пуст!")
         return
     
-    db = await get_db()
-    cursor = await db.execute('SELECT COUNT(*) FROM users')
-    users = (await cursor.fetchone())[0]
-    cursor = await db.execute('SELECT COUNT(*) FROM consultations')
-    cons = (await cursor.fetchone())[0]
-    cursor = await db.execute('SELECT COUNT(*) FROM consultations WHERE status = "active"')
-    active = (await cursor.fetchone())[0]
+    if user_id not in ADMIN_IDS:
+        await safe_send_message(user_id, f"⛔ Доступ запрещен. Ваш ID: {user_id}\nАдмины: {ADMIN_IDS}")
+        return
     
-    await safe_send_message(user_id, f"📊 Статистика\n👤 Пользователей: {users}\n📋 Консультаций: {cons}\n🟢 Активных: {active}")
+    try:
+        db = await get_db()
+        cursor = await db.execute('SELECT COUNT(*) FROM users')
+        users = (await cursor.fetchone())[0]
+        cursor = await db.execute('SELECT COUNT(*) FROM consultations')
+        cons = (await cursor.fetchone())[0]
+        cursor = await db.execute('SELECT COUNT(*) FROM consultations WHERE status = "active"')
+        active = (await cursor.fetchone())[0]
+        
+        await safe_send_message(user_id, f"📊 Статистика\n👤 Пользователей: {users}\n📋 Консультаций: {cons}\n🟢 Активных: {active}")
+    except Exception as e:
+        logging.error(f"Ошибка в /stats: {e}")
+        await safe_send_message(user_id, f"❌ Ошибка: {e}")
 
 @router.message(Command("health"))
 async def health_check(message: Message):
@@ -129,6 +135,16 @@ async def health_check(message: Message):
     text += f"Очередь: {queue_lengths}\n"
     
     await safe_send_message(user_id, text, parse_mode="HTML")
+
+@router.message(Command("backup"))
+async def manual_backup(message: Message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    
+    from workers.backups import create_backup
+    result = await create_backup()
+    await safe_send_message(user_id, result)
 
 @router.message(Command("user"))
 async def get_user(message: Message):

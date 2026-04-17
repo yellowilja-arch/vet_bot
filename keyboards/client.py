@@ -6,7 +6,7 @@ def get_client_main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=TOPICS[t]) for t in TOPICS],
-            [KeyboardButton(text="📋 Мои консультации")]
+            [KeyboardButton(text="📋 Мои консультации"), KeyboardButton(text="🆘 Помощь")]
         ],
         resize_keyboard=True
     )

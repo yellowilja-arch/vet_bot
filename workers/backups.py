@@ -63,6 +63,26 @@ async def clean_old_backups(max_files: int = 30):
         print(f"❌ Ошибка очистки бэкапов: {e}")
         return 0
 
+async def create_backup():
+    """Создаёт и загружает бэкап БД в Yandex Cloud"""
+    try:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_name = f"vet_bot_backup_{timestamp}.db"
+        temp_path = f"/tmp/{backup_name}"
+        
+        shutil.copy2(DB_PATH, temp_path)
+        success = upload_to_yandex(temp_path, backup_name)
+        os.remove(temp_path)
+        
+        if success:
+            deleted = await clean_old_backups(max_files=30)
+            return f"✅ Бэкап создан и загружен\n📅 {timestamp}\n🗑️ Удалено старых: {deleted}"
+        else:
+            return f"❌ Ошибка загрузки бэкапа\n📅 {timestamp}"
+    except Exception as e:
+        print(f"❌ Ошибка бэкапа: {e}")
+        return f"❌ Критическая ошибка бэкапа:\n{e}"
+
 async def backup_worker():
     """Фоновая задача: раз в сутки бэкапим БД в Yandex Cloud"""
     while True:

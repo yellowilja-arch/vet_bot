@@ -61,20 +61,22 @@ async def next_command(message: Message):
         await safe_send_message(user_id, "❌ Не удалось определить специализацию.")
         return
     
+    # Блокировка для предотвращения одновременного взятия клиентов
     doctor_lock = f"lock:doctor_pick:{topic}"
     if not r.set(doctor_lock, "1", nx=True, ex=2):
         await safe_send_message(user_id, "⏳ Подождите секунду, обрабатываю...")
         return
     
     try:
-        while True:
+        while True:  # Цикл по очереди до нахождения подходящего клиента
             client_id, anonymous_id, queue_id = await pop_from_queue(topic)
             if not client_id:
-                break
+                break  # Очередь пуста
             
+            # Блокировка клиента для предотвращения одновременного взятия
             client_lock = f"lock:client_pick:{client_id}"
             if not r.set(client_lock, "1", nx=True, ex=5):
-                # Возвращаем в очередь
+                # Возвращаем в очередь, если заблокирован
                 from database.db import get_db
                 db = await get_db()
                 await db.execute('UPDATE queue SET status = "waiting" WHERE id = ?', (queue_id,))
@@ -86,6 +88,7 @@ async def next_command(message: Message):
                 from services.validators import is_payment_confirmed
                 from database.consultations import get_user_consultations
                 
+                # Проверка консультации и оплаты
                 consultation_id = None
                 from database.db import get_db
                 db = await get_db()
@@ -99,11 +102,13 @@ async def next_command(message: Message):
                     consultation_id = row[0]
                 
                 if not consultation_id or not await is_payment_confirmed(consultation_id):
+                    # Возвращаем в очередь, если оплата не подтверждена
                     await db.execute('UPDATE queue SET status = "waiting" WHERE id = ?', (queue_id,))
                     r.rpush(f"queue:{topic}", f"{client_id}:{anonymous_id}:{queue_id}")
                     r.sadd(f"queue_set:{topic}", client_id)
                     continue
                 
+                # Назначаем врача и начинаем консультацию
                 doctor_name = await get_doctor_name(user_id)
                 await update_consultation_doctor(consultation_id, user_id, doctor_name)
                 
@@ -135,7 +140,11 @@ async def end_command(message: Message):
             ''', (int(current_client),))
             row = await cursor.fetchone()
             if row:
-                await save_consultation_end(row[0], "ended_by_doctor")
+                consultation_id = row[0]
+                await save_consultation_end(consultation_id, "ended_by_doctor")
+                # Отправить оценку клиенту
+                from keyboards.client import get_rating_keyboard
+                await safe_send_message(int(current_client), "Пожалуйста, оцените консультацию:", reply_markup=get_rating_keyboard(consultation_id, user_id))
             set_current_client(user_id, None)
             clear_session(int(current_client), user_id)
             await safe_send_message(int(current_client), "🔚 Врач завершил консультацию.")

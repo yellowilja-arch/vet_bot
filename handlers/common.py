@@ -15,13 +15,6 @@ from states.forms import PaymentState
 r = redis.from_url(REDIS_URL, decode_responses=True)
 router = Router()
 
-
-# ТЕСТОВАЯ КОМАНДА /stats
-@router.message(Command("stats"))
-async def stats_test(message: Message):
-    await message.answer("✅ stats работает!")
-
-
 @router.message(Command("start"))
 async def start_command(message: Message, state: FSMContext):
     await state.clear()
@@ -102,6 +95,23 @@ async def my_consultations_button(message: Message):
     await my_consultations_command(message)
 
 
+@router.message(F.text == "🆘 Помощь")
+async def help_button(message: Message):
+    user_id = message.from_user.id
+    # Проверка: была ли консультация за последние 7 дней
+    from database.consultations import get_user_consultations
+    consultations = await get_user_consultations(user_id, limit=1)
+    if consultations:
+        last_cons = consultations[0]
+        from datetime import datetime, timedelta
+        last_date = datetime.fromisoformat(last_cons[4].replace(' ', 'T'))
+        if datetime.now() - last_date < timedelta(days=7):
+            from keyboards.client import get_support_keyboard
+            await safe_send_message(user_id, "🆘 Выберите действие:", reply_markup=get_support_keyboard())
+            return
+    await safe_send_message(user_id, "🆘 Помощь доступна только клиентам, у которых была консультация в последние 7 дней.")
+
+
 @router.message(Command("cancel"))
 async def cancel_command(message: Message, state: FSMContext):
     await state.clear()
@@ -128,15 +138,21 @@ async def chat_messages(message: Message):
             from database.db import get_db
             db = await get_db()
             cursor = await db.execute('''
-                SELECT doctor_id FROM consultations 
+                SELECT doctor_id, id FROM consultations 
                 WHERE client_id = ? AND status = "active"
             ''', (user_id,))
             row = await cursor.fetchone()
             if row and row[0]:
                 doctor_id = str(row[0])
+                consultation_id = row[1]
                 r.set(f"client:{user_id}:doctor", doctor_id)
+                r.set(f"client:{user_id}:consultation", consultation_id)
         
         if doctor_id:
+            # Инкремент счётчика сообщений клиента
+            consultation_id = r.get(f"client:{user_id}:consultation")
+            if consultation_id:
+                r.incr(f"consultation:{consultation_id}:client_msgs")
             anonymous_id = get_anonymous_id(
                 r.get(f"doctor:{int(doctor_id)}:topic") or "therapy",
                 user_id
@@ -148,12 +164,23 @@ async def chat_messages(message: Message):
             elif message.document:
                 await safe_send_message(int(doctor_id), f"👤 {anonymous_id}: [Документ] {message.caption or ''}")
             else:
-                await safe_send_message(int(doctor_id), f"👤 {anonymous_id}: {message.text}")
+                await safe_send_message(int(doctor_id), f"👤 {anonymous_id}: {message.text or '[Неизвестный тип сообщения]'}")
             update_client_activity(user_id)
     
     elif await is_doctor(user_id):
         # Врач → Клиент
         current_client = get_current_client(user_id)
         if current_client:
-            await safe_send_message(int(current_client), f"👨‍⚕️ Врач: {message.text}")
+            # Инкремент счётчика сообщений врача
+            consultation_id = r.get(f"client:{int(current_client)}:consultation")
+            if consultation_id:
+                r.incr(f"consultation:{consultation_id}:doctor_msgs")
+            if message.photo:
+                await safe_send_photo(int(current_client), message.photo[-1].file_id, caption=f"👨‍⚕️ Врач: {message.caption or ''}")
+            elif message.video:
+                await safe_send_message(int(current_client), f"👨‍⚕️ Врач: [Видео] {message.caption or ''}")
+            elif message.document:
+                await safe_send_message(int(current_client), f"👨‍⚕️ Врач: [Документ] {message.caption or ''}")
+            else:
+                await safe_send_message(int(current_client), f"👨‍⚕️ Врач: {message.text or '[Неизвестный тип сообщения]'}")
             update_doctor_activity(user_id)
