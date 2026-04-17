@@ -9,7 +9,7 @@ from aiogram.types import Message, CallbackQuery
 from config import TOPICS
 from services.validators import is_doctor, get_doctor_status, get_current_client, set_doctor_status, set_current_client, update_doctor_activity, clear_session
 from services.routing import get_doctor
-from database.queue import add_to_queue, pop_from_queue, get_queue_length
+from database.queue import add_to_queue, pop_from_queue, get_queue_length, confirm_queue_processed
 from database.consultations import save_consultation_start, save_consultation_end, update_consultation_doctor, get_user_consultations
 from database.payments import confirm_payment, get_pending_payment
 from database.doctors import get_doctor_name
@@ -125,6 +125,9 @@ async def next_command(message: Message):
                 
                 set_current_client(user_id, client_id)
                 r.set(f"client:{client_id}:doctor", user_id)
+                
+                # ✅ ПОДТВЕРЖДАЕМ УСПЕШНУЮ ОБРАБОТКУ
+                await confirm_queue_processed(queue_id)
                 
                 await safe_send_message(client_id, f"✅ Врач принял заявку! Ваш ID: {anonymous_id}")
                 await safe_send_message(user_id, f"✅ Клиент {anonymous_id} принят")
