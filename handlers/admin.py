@@ -20,10 +20,22 @@ r = redis.from_url(REDIS_URL, decode_responses=True)
 router = Router()
 @router.message(Command("stats"))
 async def admin_stats(message: Message):
-    print("🔍 admin /stats received")
-    await message.answer("stats from admin")
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        await safe_send_message(user_id, "⛔ Доступ запрещен.")
+        return
     
-@router.message(Command("ban"))
+    db = await get_db()
+    cursor = await db.execute('SELECT COUNT(*) FROM users')
+    users = (await cursor.fetchone())[0]
+    cursor = await db.execute('SELECT COUNT(*) FROM consultations')
+    cons = (await cursor.fetchone())[0]
+    cursor = await db.execute('SELECT COUNT(*) FROM consultations WHERE status = "active"')
+    active = (await cursor.fetchone())[0]
+    
+    await safe_send_message(user_id, f"📊 Статистика\n👤 Пользователей: {users}\n📋 Консультаций: {cons}\n🟢 Активных: {active}")
+    
+    @router.message(Command("ban"))
 async def ban_user(message: Message):
     user_id = message.from_user.id
     if user_id not in ADMIN_IDS:
