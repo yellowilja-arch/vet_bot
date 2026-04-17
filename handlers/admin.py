@@ -18,6 +18,8 @@ from config import REDIS_URL
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
 router = Router()
+
+
 @router.message(Command("stats"))
 async def admin_stats(message: Message):
     user_id = message.from_user.id
@@ -34,8 +36,9 @@ async def admin_stats(message: Message):
     active = (await cursor.fetchone())[0]
     
     await safe_send_message(user_id, f"📊 Статистика\n👤 Пользователей: {users}\n📋 Консультаций: {cons}\n🟢 Активных: {active}")
-    
-    @router.message(Command("ban"))
+
+
+@router.message(Command("ban"))
 async def ban_user(message: Message):
     user_id = message.from_user.id
     if user_id not in ADMIN_IDS:
@@ -55,6 +58,7 @@ async def ban_user(message: Message):
     
     await safe_send_message(user_id, f"🚫 Пользователь {target_id} заблокирован")
     await safe_send_message(target_id, f"⛔ Вы заблокированы. Причина: {reason or 'не указана'}")
+
 
 @router.message(Command("unban"))
 async def unban_user(message: Message):
@@ -76,60 +80,20 @@ async def unban_user(message: Message):
     await safe_send_message(user_id, f"✅ Пользователь {target_id} разблокирован")
     await safe_send_message(target_id, "✅ Вы разблокированы")
 
-@router.message(Command("stats"))
-async def admin_stats(message: Message):
-    user_id = message.from_user.id
-    logging.info(f"🔍 /stats: user_id={user_id}, ADMIN_IDS={ADMIN_IDS}, in_admin={user_id in ADMIN_IDS}")
-    import logging
-    logging.info(f"🔍 /stats: user_id={user_id}, ADMIN_IDS={ADMIN_IDS}, in_admin={user_id in ADMIN_IDS}")
-    
-    # Отправляем ответ ВСЕ РАВНО, чтобы проверить, вызывается ли обработчик
-    if not ADMIN_IDS:
-        logging.info("ADMIN_IDS пуст")
-        await safe_send_message(user_id, "❌ ADMIN_IDS пуст! Установите ADMIN_IDS в .env")
-        logging.error("ADMIN_IDS пуст!")
-        return
-    
-    if user_id not in ADMIN_IDS:
-        logging.info(f"Не админ: {user_id} not in {ADMIN_IDS}")
-        await safe_send_message(user_id, f"⛔ Доступ запрещен. Ваш ID: {user_id}\nАдмины: {ADMIN_IDS}")
-        return
-    
-    try:
-        logging.info("Получаю статистику")
-        db = await get_db()
-        cursor = await db.execute('SELECT COUNT(*) FROM users')
-        users = (await cursor.fetchone())[0]
-        cursor = await db.execute('SELECT COUNT(*) FROM consultations')
-        cons = (await cursor.fetchone())[0]
-        cursor = await db.execute('SELECT COUNT(*) FROM consultations WHERE status = "active"')
-        active = (await cursor.fetchone())[0]
-        
-        text = f"📊 Статистика\n👤 Пользователей: {users}\n📋 Консультаций: {cons}\n🟢 Активных: {active}"
-        logging.info(f"Отправляю: {text}")
-        await safe_send_message(user_id, text)
-        logging.info("Отправлено")
-    except Exception as e:
-        logging.info(f"Ошибка в /stats: {e}")
-        logging.error(f"Ошибка в /stats: {e}")
-        await safe_send_message(user_id, f"❌ Ошибка: {e}")
 
 @router.message(Command("health"))
 async def health_check(message: Message):
-    """Проверка здоровья бота (Redis, SQLite, активные консультации)"""
     user_id = message.from_user.id
     if user_id not in ADMIN_IDS:
         await safe_send_message(user_id, "⛔ Только для админов")
         return
     
-    # Проверка Redis
     try:
         r.ping()
         redis_status = "✅"
     except Exception as e:
         redis_status = f"❌ {e}"
     
-    # Проверка SQLite
     try:
         db = await get_db()
         await db.execute("SELECT 1")
@@ -137,17 +101,14 @@ async def health_check(message: Message):
     except Exception as e:
         sqlite_status = f"❌ {e}"
     
-    # Количество активных консультаций
     try:
         cursor = await db.execute('SELECT COUNT(*) FROM consultations WHERE status = "active"')
         active_cons = (await cursor.fetchone())[0]
     except:
         active_cons = "ошибка"
     
-    # Количество врачей онлайн
     online_doctors = sum(1 for d in DOCTOR_IDS if get_doctor_status(d) == "online")
     
-    # Длина очередей
     queue_lengths = {}
     for topic in TOPICS.keys():
         queue_lengths[topic] = await get_queue_length(topic)
@@ -161,15 +122,6 @@ async def health_check(message: Message):
     
     await safe_send_message(user_id, text, parse_mode="HTML")
 
-@router.message(Command("backup"))
-async def manual_backup(message: Message):
-    user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
-        return
-    
-    from workers.backups import create_backup
-    result = await create_backup()
-    await safe_send_message(user_id, result)
 
 @router.message(Command("user"))
 async def get_user(message: Message):
@@ -205,9 +157,6 @@ async def get_user(message: Message):
     
     await safe_send_message(user_id, text, parse_mode="HTML")
 
-# ============================================
-# КОМАНДЫ ВОССТАНОВЛЕНИЯ
-# ============================================
 
 @router.message(Command("resetuser"))
 async def reset_user(message: Message):
@@ -224,6 +173,7 @@ async def reset_user(message: Message):
     await reset_user_state(target_id)
     await safe_send_message(user_id, f"✅ Состояние пользователя {target_id} сброшено")
 
+
 @router.message(Command("resetall"))
 async def reset_all(message: Message):
     user_id = message.from_user.id
@@ -232,6 +182,7 @@ async def reset_all(message: Message):
     
     await reset_all_states()
     await safe_send_message(user_id, "✅ Все состояния сброшены")
+
 
 @router.message(Command("closestuck"))
 async def close_stuck(message: Message):
@@ -242,6 +193,7 @@ async def close_stuck(message: Message):
     await close_stuck_requests()
     await safe_send_message(user_id, "✅ Зависшие запросы закрыты")
 
+
 @router.message(Command("unlockdoctors"))
 async def unlock_doctors(message: Message):
     user_id = message.from_user.id
@@ -251,9 +203,6 @@ async def unlock_doctors(message: Message):
     await unlock_all_doctors()
     await safe_send_message(user_id, "✅ Все врачи разблокированы")
 
-# ============================================
-# УПРАВЛЕНИЕ ВРАЧАМИ
-# ============================================
 
 @router.message(Command("adddoctor"))
 async def add_doctor_command(message: Message):
@@ -278,6 +227,7 @@ async def add_doctor_command(message: Message):
     await safe_send_message(user_id, f"✅ Врач {name} добавлен!")
     await safe_send_message(telegram_id, "👨‍⚕️ Вы добавлены в систему как врач!\nИспользуйте /start для панели управления.")
 
+
 @router.message(Command("removedoctor"))
 async def remove_doctor_command(message: Message):
     user_id = message.from_user.id
@@ -293,9 +243,6 @@ async def remove_doctor_command(message: Message):
     await remove_doctor(telegram_id)
     await safe_send_message(user_id, f"✅ Врач {telegram_id} удалён из системы")
 
-# ============================================
-# ПОДДЕРЖКА
-# ============================================
 
 @router.message(Command("feedback"))
 async def feedback_command(message: Message, state: FSMContext):
@@ -312,6 +259,7 @@ async def feedback_command(message: Message, state: FSMContext):
         "Чтобы отменить, отправьте /cancel.",
         parse_mode="HTML"
     )
+
 
 @router.message(WaitingState.waiting_for_feedback)
 async def process_feedback(message: Message, state: FSMContext):
@@ -337,9 +285,6 @@ async def process_feedback(message: Message, state: FSMContext):
     await safe_send_message(user_id, "✅ Спасибо за обратную связь!")
     await state.clear()
 
-# ============================================
-# ОБРАБОТКА ОБРАЩЕНИЙ В ПОДДЕРЖКУ
-# ============================================
 
 @router.callback_query(lambda c: c.data.startswith("support_reply:"))
 async def reply_to_support(call: CallbackQuery, state: FSMContext):
@@ -356,6 +301,7 @@ async def reply_to_support(call: CallbackQuery, state: FSMContext):
     await state.set_state(WaitingState.waiting_for_support_reply)
     await safe_send_message(admin_id, f"✏️ Напишите ответ пользователю (обращение #{request_id}).")
     await call.answer()
+
 
 @router.message(WaitingState.waiting_for_support_reply)
 async def send_support_reply(message: Message, state: FSMContext):
