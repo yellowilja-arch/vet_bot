@@ -57,6 +57,10 @@ async def main():
     await init_startup()
     register_handlers(dp)
     
+    # Удаляем webhook, если активен
+    await bot.delete_webhook()
+    logging.info("✅ Webhook удалён")
+    
     # Запуск фоновых задач
     asyncio.create_task(backup_worker())
     asyncio.create_task(inactivity_worker())
