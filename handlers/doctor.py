@@ -20,11 +20,6 @@ from states.forms import PaymentState
 router = Router()
 
 
-@router.message()
-async def catch_all_doctor(message: Message):
-    print(f"🔍 doctor catch_all: {message.text}")
-
-
 @router.message(Command("testdoc"))
 async def test_doctor(message: Message):
     await message.answer("doctor router works!")
@@ -58,14 +53,14 @@ async def show_status(message: Message):
     
     text = f"📊 Статус: {get_doctor_status(user_id)}\nСпециализация: {TOPICS.get(topic, '?')}\n"
     text += f"👤 Текущий клиент: {current or 'нет'}\n📋 Очередь: {queue_len}"
-    await safe_send_message(user_id, text, reply_markup=get_doctor_status_keyboard())
+    
+    has_client = current is not None
+    await safe_send_message(user_id, text, reply_markup=get_doctor_status_keyboard(has_client))
 
 
 @router.message(Command("next"))
 async def next_command(message: Message):
     user_id = message.from_user.id
-    print(f"🔍 /next: user_id={user_id}, is_doctor={await is_doctor(user_id)}")
-    
     if not await is_doctor(user_id):
         return
     
@@ -221,5 +216,6 @@ async def show_status_callback(call: CallbackQuery):
     queue_len = await get_queue_length(topic) if topic else 0
     text = f"📊 Статус: {get_doctor_status(doctor_id)}\nСпециализация: {TOPICS.get(topic, '?')}\n"
     text += f"👤 Текущий клиент: {current or 'нет'}\n📋 Очередь: {queue_len}"
-    await call.message.edit_text(text, reply_markup=get_doctor_status_keyboard())
+    has_client = current is not None
+    await call.message.edit_text(text, reply_markup=get_doctor_status_keyboard(has_client))
     await call.answer()
