@@ -6,7 +6,7 @@ load_dotenv()
 # Telegram
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
-ADMIN_IDS = [1092230808]  # Временная установка для тестирования
+ADMIN_IDS = []  # Временно пусто для теста
 PHONE_NUMBER = os.getenv("PHONE_NUMBER", "+79256530940")
 
 # Railway PORT
