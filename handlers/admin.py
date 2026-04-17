@@ -62,24 +62,24 @@ async def unban_user(message: Message):
 @router.message(Command("stats"))
 async def admin_stats(message: Message):
     user_id = message.from_user.id
-    print(f"🔍 /stats: user_id={user_id}, ADMIN_IDS={ADMIN_IDS}, in_admin={user_id in ADMIN_IDS}")
+    logging.info(f"🔍 /stats: user_id={user_id}, ADMIN_IDS={ADMIN_IDS}, in_admin={user_id in ADMIN_IDS}")
     import logging
     logging.info(f"🔍 /stats: user_id={user_id}, ADMIN_IDS={ADMIN_IDS}, in_admin={user_id in ADMIN_IDS}")
     
     # Отправляем ответ ВСЕ РАВНО, чтобы проверить, вызывается ли обработчик
     if not ADMIN_IDS:
-        print("ADMIN_IDS пуст")
+        logging.info("ADMIN_IDS пуст")
         await safe_send_message(user_id, "❌ ADMIN_IDS пуст! Установите ADMIN_IDS в .env")
         logging.error("ADMIN_IDS пуст!")
         return
     
     if user_id not in ADMIN_IDS:
-        print(f"Не админ: {user_id} not in {ADMIN_IDS}")
+        logging.info(f"Не админ: {user_id} not in {ADMIN_IDS}")
         await safe_send_message(user_id, f"⛔ Доступ запрещен. Ваш ID: {user_id}\nАдмины: {ADMIN_IDS}")
         return
     
     try:
-        print("Получаю статистику")
+        logging.info("Получаю статистику")
         db = await get_db()
         cursor = await db.execute('SELECT COUNT(*) FROM users')
         users = (await cursor.fetchone())[0]
@@ -89,11 +89,11 @@ async def admin_stats(message: Message):
         active = (await cursor.fetchone())[0]
         
         text = f"📊 Статистика\n👤 Пользователей: {users}\n📋 Консультаций: {cons}\n🟢 Активных: {active}"
-        print(f"Отправляю: {text}")
+        logging.info(f"Отправляю: {text}")
         await safe_send_message(user_id, text)
-        print("Отправлено")
+        logging.info("Отправлено")
     except Exception as e:
-        print(f"Ошибка в /stats: {e}")
+        logging.info(f"Ошибка в /stats: {e}")
         logging.error(f"Ошибка в /stats: {e}")
         await safe_send_message(user_id, f"❌ Ошибка: {e}")
 
