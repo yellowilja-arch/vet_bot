@@ -64,7 +64,7 @@ async def main():
     asyncio.create_task(inactivity_worker())
     
     # Webhook setup
-    webhook_url = f"https://yellowilja-arch-vet-bot.up.railway.app/webhook"
+    webhook_url = f"https://vet-bot-production.up.railway.app/webhook"
     try:
         await bot.set_webhook(webhook_url)
         logging.info(f"✅ Webhook установлен: {webhook_url}")
