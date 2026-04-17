@@ -17,7 +17,10 @@ from keyboards.doctor import get_doctor_main_keyboard, get_doctor_status_keyboar
 from states.forms import PaymentState
 
 router = Router()
-
+@router.message(Command("testdoc"))
+async def test_doctor(message: Message):
+    await message.answer("doctor router works!")
+    
 @router.message(Command("online"))
 async def go_online(message: Message):
     user_id = message.from_user.id
