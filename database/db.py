@@ -1,0 +1,152 @@
+import asyncio
+import aiosqlite
+from config import DB_PATH
+
+_db_pool = None
+_db_lock = asyncio.Lock()
+
+async def get_db():
+    global _db_pool
+    async with _db_lock:
+        if _db_pool is None:
+            _db_pool = await aiosqlite.connect(DB_PATH)
+            await _db_pool.execute("PRAGMA journal_mode=WAL")
+            await _db_pool.execute("PRAGMA busy_timeout=5000")
+        else:
+            try:
+                await _db_pool.execute("SELECT 1")
+            except:
+                _db_pool = await aiosqlite.connect(DB_PATH)
+                await _db_pool.execute("PRAGMA journal_mode=WAL")
+                await _db_pool.execute("PRAGMA busy_timeout=5000")
+        return _db_pool
+
+async def init_db():
+    db = await get_db()
+    
+    # Пользователи
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            full_name TEXT,
+            first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Врачи
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS doctors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            specialization TEXT NOT NULL,
+            is_active BOOLEAN DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Консультации
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS consultations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            client_anonymous_id TEXT NOT NULL,
+            doctor_id INTEGER,
+            doctor_name TEXT,
+            doctor_specialization TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ended_at TIMESTAMP,
+            duration_seconds INTEGER,
+            client_messages INTEGER DEFAULT 0,
+            doctor_messages INTEGER DEFAULT 0,
+            payment_confirmed BOOLEAN DEFAULT 0
+        )
+    ''')
+    
+    await db.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_active_client
+        ON consultations(client_id) WHERE status = 'active'
+    ''')
+    
+    # Платежи
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            consultation_id INTEGER,
+            amount INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            receipt_file_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            confirmed_at TIMESTAMP
+        )
+    ''')
+    
+    # Очередь (бэкап)
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            anonymous_id TEXT NOT NULL,
+            status TEXT DEFAULT 'waiting',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Оценки врачей
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS doctor_ratings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doctor_id INTEGER NOT NULL,
+            client_id INTEGER NOT NULL,
+            consultation_id INTEGER NOT NULL,
+            rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+            comment TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Обращения в поддержку
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS support_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            username TEXT,
+            message TEXT NOT NULL,
+            status TEXT DEFAULT 'new',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            resolved_at TIMESTAMP
+        )
+    ''')
+    
+    # Обратная связь
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            username TEXT,
+            feedback TEXT NOT NULL,
+            status TEXT DEFAULT 'new',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Чёрный список
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS blacklist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL UNIQUE,
+            reason TEXT,
+            blocked_by INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    await db.commit()
+    print("✅ База данных SQLite инициализирована")
