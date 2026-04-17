@@ -18,6 +18,9 @@ from config import REDIS_URL
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
 router = Router()
+@router.message(Command("stats"))
+async def admin_stats(message: Message):
+    await message.answer("📊 stats из admin.py")
 
 # ============================================
 # ОСНОВНЫЕ АДМИН-КОМАНДЫ
