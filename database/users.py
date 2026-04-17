@@ -1,3 +1,4 @@
+import logging
 from database.db import get_db
 
 async def save_user_if_new(user_id: int, username: str = None, first_name: str = None, last_name: str = None):
@@ -8,12 +9,19 @@ async def save_user_if_new(user_id: int, username: str = None, first_name: str =
     
     if not exists:
         full_name = f"{first_name or ''} {last_name or ''}".strip()
-        await db.execute('''
-            INSERT INTO users (user_id, username, first_name, last_name, full_name)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (user_id, username, first_name, last_name, full_name))
-        await db.commit()
-        print(f"📝 Новый пользователь сохранён: {user_id} (@{username})")
+        try:
+            await db.execute('''
+                INSERT INTO users (user_id, username, first_name, last_name, full_name)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (user_id, username, first_name, last_name, full_name))
+            await db.commit()
+            print(f"📝 Новый пользователь сохранён: {user_id} (@{username})")
+        except Exception as e:
+            # Игнорируем ситуацию гонки, если пользователь уже добавлен
+            if 'UNIQUE constraint failed' in str(e):
+                logging.info(f"Пользователь уже есть в БД: {user_id}")
+            else:
+                raise
 
 async def get_user_info(user_id: int):
     """Возвращает информацию о пользователе"""

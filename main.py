@@ -19,7 +19,9 @@ dp = Dispatcher()
 logging.info(f"🔑 Загруженные администраторы: {ADMIN_IDS}")
 
 @dp.error()
-async def global_error_handler(update, exception):
+async def global_error_handler(*args, exception=None, **kwargs):
+    if exception is None and len(args) >= 2:
+        exception = args[1]
     logging.error(f"Глобальная ошибка: {exception}")
     for admin_id in ADMIN_IDS:
         await safe_send_message(admin_id, f"❌ Глобальная ошибка бота:\n<pre>{exception}</pre>", parse_mode="HTML")
