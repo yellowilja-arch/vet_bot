@@ -16,11 +16,10 @@ r = redis.from_url(REDIS_URL, decode_responses=True)
 router = Router()
 
 
-# ДИАГНОСТИКА: ловит все сообщения
-@router.message()
-async def catch_all(message: Message):
-    print(f"Поймано сообщение: {message.text}")
-    await message.answer(f"Бот получил: {message.text}")
+# ДИАГНОСТИКА: тестовая команда /stats
+@router.message(Command("stats"))
+async def stats_test(message: Message):
+    await message.answer("✅ stats работает!")
 
 
 @router.message(Command("start"))
@@ -107,3 +106,54 @@ async def my_consultations_button(message: Message):
 async def cancel_command(message: Message, state: FSMContext):
     await state.clear()
     await safe_send_message(message.from_user.id, "❌ Действие отменено.")
+
+
+@router.message()
+async def chat_messages(message: Message):
+    """Пересылка сообщений между клиентом и врачом"""
+    user_id = message.from_user.id
+    
+    if await is_blocked(user_id):
+        return
+    
+    if message.text in ["✅ Я оплатил"] + list(TOPICS.values()) + ["📋 Мои консультации"]:
+        return
+    
+    from services.validators import is_client_active, get_current_client, update_client_activity, update_doctor_activity
+    
+    if await is_client_active(user_id):
+        # Клиент → Врач
+        doctor_id = r.get(f"client:{user_id}:doctor")
+        if not doctor_id:
+            from database.db import get_db
+            db = await get_db()
+            cursor = await db.execute('''
+                SELECT doctor_id FROM consultations 
+                WHERE client_id = ? AND status = "active"
+            ''', (user_id,))
+            row = await cursor.fetchone()
+            if row and row[0]:
+                doctor_id = str(row[0])
+                r.set(f"client:{user_id}:doctor", doctor_id)
+        
+        if doctor_id:
+            anonymous_id = get_anonymous_id(
+                r.get(f"doctor:{int(doctor_id)}:topic") or "therapy",
+                user_id
+            )
+            if message.photo:
+                await safe_send_photo(int(doctor_id), message.photo[-1].file_id, caption=f"👤 {anonymous_id}: {message.caption or ''}")
+            elif message.video:
+                await safe_send_message(int(doctor_id), f"👤 {anonymous_id}: [Видео] {message.caption or ''}")
+            elif message.document:
+                await safe_send_message(int(doctor_id), f"👤 {anonymous_id}: [Документ] {message.caption or ''}")
+            else:
+                await safe_send_message(int(doctor_id), f"👤 {anonymous_id}: {message.text}")
+            update_client_activity(user_id)
+    
+    elif await is_doctor(user_id):
+        # Врач → Клиент
+        current_client = get_current_client(user_id)
+        if current_client:
+            await safe_send_message(int(current_client), f"👨‍⚕️ Врач: {message.text}")
+            update_doctor_activity(user_id)
