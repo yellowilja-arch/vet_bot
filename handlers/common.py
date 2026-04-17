@@ -262,6 +262,6 @@ async def chat_messages(message: Message):
 # ============================================
 
 @router.message()
-async def catch_all(message: Message):
-    print(f"🔍 catch_all: {message.text}")
-    await message.answer(f"Неизвестная команда: {message.text}")
+async def debug_all(message: Message):
+    print(f"🔍 DEBUG: {message.text}")
+    await message.answer(f"DEBUG: {message.text}")
