@@ -18,12 +18,9 @@ router = Router()
 
 
 # ============================================
-# ДИАГНОСТИКА
+# КОМАНДЫ
 # ============================================
-@router.message()
-async def catch_all(message: Message):
-    print(f"🔍 catch_all: {message.text}")
-    
+
 @router.message(Command("fixme"))
 async def fix_me(message: Message):
     user_id = message.from_user.id
@@ -34,10 +31,8 @@ async def fix_me(message: Message):
     from database.db import get_db
     db = await get_db()
     
-    # Очищаем старых врачей (если есть)
     await db.execute("DELETE FROM doctors")
     
-    # Добавляем врачей напрямую
     doctors_data = [
         (1092230808, "Корнев Михаил", "dentistry"),
         (222222222, "Сидоров Алексей", "surgery"),
@@ -51,28 +46,22 @@ async def fix_me(message: Message):
         ''', (tg_id, name, spec))
     await db.commit()
     
-    # Принудительно загружаем DOCTOR_IDS
     from database.doctors import load_doctors_from_db
     await load_doctors_from_db()
     
-    # Устанавливаем специализацию в Redis
     r.set(f"doctor:{user_id}:topic", "dentistry")
     r.set(f"doctor:222222222:topic", "surgery")
     r.set(f"doctor:1906114179:topic", "therapy")
     
-    # ПРЯМАЯ ПРОВЕРКА из database.doctors
     from database.doctors import DOCTOR_IDS
     await message.answer(f"✅ Врачи добавлены! DOCTOR_IDS: {DOCTOR_IDS}")
+
 
 @router.message(Command("stats"))
 async def stats_command(message: Message):
     print("🔍 stats command received!")
     await message.answer("✅ stats работает!")
 
-
-# ============================================
-# КОМАНДЫ ВРАЧА (временно здесь)
-# ============================================
 
 @router.message(Command("online"))
 async def go_online(message: Message):
@@ -109,10 +98,6 @@ async def show_status(message: Message):
     text += f"👤 Текущий клиент: {current or 'нет'}\n📋 Очередь: {queue_len}"
     await safe_send_message(user_id, text, reply_markup=get_doctor_status_keyboard())
 
-
-# ============================================
-# КОМАНДЫ КЛИЕНТА
-# ============================================
 
 @router.message(Command("start"))
 async def start_command(message: Message, state: FSMContext):
@@ -201,7 +186,7 @@ async def cancel_command(message: Message, state: FSMContext):
 
 
 # ============================================
-# ПЕРЕСЫЛКА СООБЩЕНИЙ
+# ПЕРЕСЫЛКА СООБЩЕНИЙ (чат)
 # ============================================
 
 @router.message()
@@ -248,7 +233,7 @@ async def chat_messages(message: Message):
             elif message.document:
                 await safe_send_message(int(doctor_id), f"👤 {anonymous_id}: [Документ] {message.caption or ''}")
             else:
-                await safe_send_message(int(doctor_id), f"👤 {anonymous_id}: {message.text or '[Неизвестный тип сообщения]'}")
+                await safe_send_message(int(doctor_id), f"👤 {anonymous_id}: {message.text}")
             update_client_activity(user_id)
     
     elif await is_doctor(user_id):
@@ -264,5 +249,15 @@ async def chat_messages(message: Message):
             elif message.document:
                 await safe_send_message(int(current_client), f"👨‍⚕️ Врач: [Документ] {message.caption or ''}")
             else:
-                await safe_send_message(int(current_client), f"👨‍⚕️ Врач: {message.text or '[Неизвестный тип сообщения]'}")
+                await safe_send_message(int(current_client), f"👨‍⚕️ Врач: {message.text}")
             update_doctor_activity(user_id)
+
+
+# ============================================
+# CATCH_ALL — В САМОМ КОНЦЕ (ловит всё, что не обработано выше)
+# ============================================
+
+@router.message()
+async def catch_all(message: Message):
+    print(f"🔍 catch_all: {message.text}")
+    await message.answer(f"Неизвестная команда: {message.text}")
