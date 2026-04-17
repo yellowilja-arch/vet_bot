@@ -6,7 +6,7 @@ load_dotenv()
 # Telegram
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
-ADMIN_IDS = []  # Временно пусто для теста
+ADMIN_IDS = [1092230808]  # 👈 ТВОЙ TELEGRAM ID
 PHONE_NUMBER = os.getenv("PHONE_NUMBER", "+79256530940")
 
 # Railway PORT
@@ -36,8 +36,9 @@ TOPICS = {
     "therapy": "Терапевт"
 }
 
+# НАЧАЛЬНЫЕ ВРАЧИ (добавь свой ID)
 INITIAL_DOCTORS = {
-    "dentistry": [{"id": 1092230808, "name": "Корнев Михаил"}],
+    "dentistry": [{"id": 1092230808, "name": "Корнев Михаил"}],  # 👈 ТЫ
     "surgery": [{"id": 222222222, "name": "Сидоров Алексей"}],
     "therapy": [{"id": 1906114179, "name": "Васильева Елена"}]
 }
