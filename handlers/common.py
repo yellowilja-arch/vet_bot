@@ -20,6 +20,30 @@ router = Router()
 # ============================================
 # ДИАГНОСТИКА
 # ============================================
+@router.message(Command("fixme"))
+async def fix_me(message: Message):
+    user_id = message.from_user.id
+    if user_id != 1092230808:
+        await message.answer("⛔ Не для тебя")
+        return
+    
+    # Добавляем себя в Redis как врача
+    r.set(f"doctor:{user_id}:topic", "dentistry")
+    
+    # Добавляем в БД, если нет
+    from database.db import get_db
+    db = await get_db()
+    await db.execute('''
+        INSERT OR IGNORE INTO doctors (telegram_id, name, specialization, is_active)
+        VALUES (?, ?, ?, 1)
+    ''', (user_id, "Корнев Михаил", "dentistry"))
+    await db.commit()
+    
+    # Перезагружаем список врачей
+    from database.doctors import load_doctors_from_db
+    await load_doctors_from_db()
+    
+    await message.answer("✅ Ты добавлен как врач (стоматолог)! Теперь используй /online")
 
 @router.message(Command("testdoc"))
 async def test_doc_common(message: Message):
