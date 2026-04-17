@@ -57,11 +57,9 @@ async def fix_me(message: Message):
     await message.answer(f"✅ Врачи добавлены! DOCTOR_IDS: {DOCTOR_IDS}")
 
 
-@router.message(Command("stats"))
-async def stats_command(message: Message):
-    print("🔍 stats command received!")
-    await message.answer("✅ stats работает!")
-
+# ============================================
+# КОМАНДЫ ВРАЧА
+# ============================================
 
 @router.message(Command("online"))
 async def go_online(message: Message):
@@ -96,8 +94,14 @@ async def show_status(message: Message):
     
     text = f"📊 Статус: {get_doctor_status(user_id)}\nСпециализация: {TOPICS.get(topic, '?')}\n"
     text += f"👤 Текущий клиент: {current or 'нет'}\n📋 Очередь: {queue_len}"
-    await safe_send_message(user_id, text, reply_markup=get_doctor_status_keyboard())
+    
+    has_client = current is not None
+    await safe_send_message(user_id, text, reply_markup=get_doctor_status_keyboard(has_client))
 
+
+# ============================================
+# КОМАНДЫ КЛИЕНТА
+# ============================================
 
 @router.message(Command("start"))
 async def start_command(message: Message, state: FSMContext):
@@ -254,7 +258,7 @@ async def chat_messages(message: Message):
 
 
 # ============================================
-# CATCH_ALL — В САМОМ КОНЦЕ (ловит всё, что не обработано выше)
+# CATCH_ALL — В САМОМ КОНЦЕ
 # ============================================
 
 @router.message()
