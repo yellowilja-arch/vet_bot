@@ -2,6 +2,7 @@ import redis
 from config import REDIS_URL
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
+
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
@@ -17,10 +18,20 @@ from keyboards.doctor import get_doctor_main_keyboard, get_doctor_status_keyboar
 from states.forms import PaymentState
 
 router = Router()
+
+
+# ДИАГНОСТИКА: ловит все сообщения в этом роутере
+@router.message()
+async def catch_all_doctor(message: Message):
+    print(f"🔍 doctor catch_all: {message.text}")
+    await message.answer(f"doctor catch_all: {message.text}")
+
+
 @router.message(Command("testdoc"))
 async def test_doctor(message: Message):
     await message.answer("doctor router works!")
-    
+
+
 @router.message(Command("online"))
 async def go_online(message: Message):
     user_id = message.from_user.id
@@ -28,12 +39,14 @@ async def go_online(message: Message):
         set_doctor_status(user_id, "online")
         await safe_send_message(user_id, "🟢 Вы онлайн", reply_markup=get_doctor_main_keyboard())
 
+
 @router.message(Command("offline"))
 async def go_offline(message: Message):
     user_id = message.from_user.id
     if await is_doctor(user_id):
         set_doctor_status(user_id, "offline")
         await safe_send_message(user_id, "🔴 Вы офлайн", reply_markup=get_doctor_main_keyboard())
+
 
 @router.message(Command("status"))
 async def show_status(message: Message):
@@ -48,6 +61,7 @@ async def show_status(message: Message):
     text = f"📊 Статус: {get_doctor_status(user_id)}\nСпециализация: {TOPICS.get(topic, '?')}\n"
     text += f"👤 Текущий клиент: {current or 'нет'}\n📋 Очередь: {queue_len}"
     await safe_send_message(user_id, text, reply_markup=get_doctor_status_keyboard())
+
 
 @router.message(Command("next"))
 async def next_command(message: Message):
@@ -64,22 +78,19 @@ async def next_command(message: Message):
         await safe_send_message(user_id, "❌ Не удалось определить специализацию.")
         return
     
-    # Блокировка для предотвращения одновременного взятия клиентов
     doctor_lock = f"lock:doctor_pick:{topic}"
     if not r.set(doctor_lock, "1", nx=True, ex=2):
         await safe_send_message(user_id, "⏳ Подождите секунду, обрабатываю...")
         return
     
     try:
-        while True:  # Цикл по очереди до нахождения подходящего клиента
+        while True:
             client_id, anonymous_id, queue_id = await pop_from_queue(topic)
             if not client_id:
-                break  # Очередь пуста
+                break
             
-            # Блокировка клиента для предотвращения одновременного взятия
             client_lock = f"lock:client_pick:{client_id}"
             if not r.set(client_lock, "1", nx=True, ex=5):
-                # Возвращаем в очередь, если заблокирован
                 from database.db import get_db
                 db = await get_db()
                 await db.execute('UPDATE queue SET status = "waiting" WHERE id = ?', (queue_id,))
@@ -91,7 +102,6 @@ async def next_command(message: Message):
                 from services.validators import is_payment_confirmed
                 from database.consultations import get_user_consultations
                 
-                # Проверка консультации и оплаты
                 consultation_id = None
                 from database.db import get_db
                 db = await get_db()
@@ -105,13 +115,11 @@ async def next_command(message: Message):
                     consultation_id = row[0]
                 
                 if not consultation_id or not await is_payment_confirmed(consultation_id):
-                    # Возвращаем в очередь, если оплата не подтверждена
                     await db.execute('UPDATE queue SET status = "waiting" WHERE id = ?', (queue_id,))
                     r.rpush(f"queue:{topic}", f"{client_id}:{anonymous_id}:{queue_id}")
                     r.sadd(f"queue_set:{topic}", client_id)
                     continue
                 
-                # Назначаем врача и начинаем консультацию
                 doctor_name = await get_doctor_name(user_id)
                 await update_consultation_doctor(consultation_id, user_id, doctor_name)
                 
@@ -129,6 +137,7 @@ async def next_command(message: Message):
     finally:
         r.delete(doctor_lock)
 
+
 @router.message(Command("end"))
 async def end_command(message: Message):
     user_id = message.from_user.id
@@ -145,13 +154,13 @@ async def end_command(message: Message):
             if row:
                 consultation_id = row[0]
                 await save_consultation_end(consultation_id, "ended_by_doctor")
-                # Отправить оценку клиенту
                 from keyboards.client import get_rating_keyboard
                 await safe_send_message(int(current_client), "Пожалуйста, оцените консультацию:", reply_markup=get_rating_keyboard(consultation_id, user_id))
             set_current_client(user_id, None)
             clear_session(int(current_client), user_id)
             await safe_send_message(int(current_client), "🔚 Врач завершил консультацию.")
             await safe_send_message(user_id, "✅ Консультация завершена")
+
 
 @router.callback_query(lambda c: c.data == "doctor_online")
 async def doctor_online_callback(call: CallbackQuery):
@@ -163,6 +172,7 @@ async def doctor_online_callback(call: CallbackQuery):
     await call.message.edit_text("🟢 Вы стали онлайн.", reply_markup=get_doctor_main_keyboard())
     await call.answer()
 
+
 @router.callback_query(lambda c: c.data == "doctor_offline")
 async def doctor_offline_callback(call: CallbackQuery):
     doctor_id = call.from_user.id
@@ -172,6 +182,7 @@ async def doctor_offline_callback(call: CallbackQuery):
     set_doctor_status(doctor_id, "offline")
     await call.message.edit_text("🔴 Вы стали офлайн.", reply_markup=get_doctor_main_keyboard())
     await call.answer()
+
 
 @router.callback_query(lambda c: c.data == "view_queue")
 async def view_queue_callback(call: CallbackQuery):
@@ -196,6 +207,7 @@ async def view_queue_callback(call: CallbackQuery):
             text += f"{i+1}. {anonymous_id}\n"
         await safe_send_message(doctor_id, text)
     await call.answer()
+
 
 @router.callback_query(lambda c: c.data == "show_status")
 async def show_status_callback(call: CallbackQuery):
