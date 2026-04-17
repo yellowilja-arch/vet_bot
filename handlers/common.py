@@ -16,9 +16,10 @@ r = redis.from_url(REDIS_URL, decode_responses=True)
 router = Router()
 
 
-# ТЕСТОВАЯ КОМАНДА /stats
+# ДИАГНОСТИКА: команда /stats с логом
 @router.message(Command("stats"))
-async def stats_test(message: Message):
+async def stats_command(message: Message):
+    print("🔍 stats command received!")  # 👈 ЭТА СТРОКА ДОЛЖНА ПОЯВИТЬСЯ В ЛОГАХ
     await message.answer("✅ stats работает!")
 
 
