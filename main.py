@@ -3,15 +3,13 @@ import signal
 import sys
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
-from config import BOT_TOKEN, ADMIN_IDS, REDIS_URL, PORT
+from config import BOT_TOKEN, ADMIN_IDS, REDIS_URL
 from handlers import register_handlers
 from workers.backups import backup_worker
 from workers.inactivity import inactivity_worker
 from utils.helpers import safe_send_message
 from database.db import get_db
 import logging
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 
@@ -63,28 +61,6 @@ async def main():
     asyncio.create_task(backup_worker())
     asyncio.create_task(inactivity_worker())
     
-    # Webhook setup
-    webhook_url = f"https://vet-bot-production.up.railway.app/webhook"
-    try:
-        await bot.set_webhook(webhook_url)
-        logging.info(f"✅ Webhook установлен: {webhook_url}")
-    except Exception as e:
-        logging.error(f"❌ Ошибка установки webhook: {e}")
-        return
-    
-    # Создание веб-приложения
-    app = web.Application()
-    webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-    webhook_handler.register(app, path="/webhook")
-    
-    # Запуск сервера
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
-    
-    logging.info(f"🚀 Бот запущен на порту {PORT} с webhook")
-    
     # Graceful shutdown
     def signal_handler(signum, frame):
         logging.info("Получен сигнал завершения, останавливаем бота...")
@@ -93,10 +69,11 @@ async def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    # Держим приложение запущенным
     try:
-        await asyncio.Future()  # Бесконечный цикл
-    except KeyboardInterrupt:
+        await dp.start_polling(bot)
+    except Exception as e:
+        logging.error(f"Ошибка в polling: {e}")
+    finally:
         await shutdown()
 
 async def shutdown():
