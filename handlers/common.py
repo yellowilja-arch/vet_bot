@@ -39,12 +39,15 @@ async def fix_me(message: Message):
     ''', (user_id, "Корнев Михаил", "dentistry"))
     await db.commit()
     
-    # Перезагружаем список врачей
+    # ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ DOCTOR_IDS
     from database.doctors import load_doctors_from_db
     await load_doctors_from_db()
     
-    await message.answer("✅ Ты добавлен как врач (стоматолог)! Теперь используй /online")
-
+    # ПРЯМАЯ ПРОВЕРКА
+    from services.validators import DOCTOR_IDS
+    print(f"🔍 DOCTOR_IDS после обновления: {DOCTOR_IDS}")
+    
+    await message.answer(f"✅ Ты добавлен как врач! DOCTOR_IDS: {DOCTOR_IDS}")
 @router.message(Command("testdoc"))
 async def test_doc_common(message: Message):
     await message.answer("testdoc from common")
