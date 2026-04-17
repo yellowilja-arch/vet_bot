@@ -13,21 +13,18 @@ from services.notifications import notify_admin_startup, send_crash_report
 from services.reset_tools import reset_all_states
 from utils.logger import setup_logging
 
-# Настройка логирования
 setup_logging()
 
-# Инициализация бота
 bot = Bot(token=BOT_TOKEN)
 storage = RedisStorage.from_url(REDIS_URL)
 dp = Dispatcher(storage=storage)
 
-# Регистрация роутеров
+# 👇 ВСЕ РОУТЕРЫ ПОДКЛЮЧЕНЫ
 dp.include_router(common.router)
 dp.include_router(doctor.router)
 dp.include_router(client.router)
 dp.include_router(admin.router)
 
-# Глобальный перехват ошибок
 def global_exception_handler(exc_type, exc_value, exc_traceback):
     error_msg = ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))
     asyncio.create_task(send_crash_report(error_msg))
@@ -36,20 +33,15 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 sys.excepthook = global_exception_handler
 
 async def on_startup():
-    """Действия при запуске бота"""
     await init_db()
     await init_doctors()
-    await reset_all_states()  # Сброс состояний при старте (очистка Redis)
+    await reset_all_states()
     await notify_admin_startup()
-    
-    # Запуск фоновых задач
     asyncio.create_task(inactivity_worker())
     asyncio.create_task(backup_worker())
-    
     print("✅ Бот успешно запущен!")
 
 async def on_shutdown():
-    """Действия при остановке бота"""
     print("🛑 Бот останавливается...")
     await bot.session.close()
     await storage.close()
