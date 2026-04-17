@@ -64,7 +64,7 @@ async def main():
     asyncio.create_task(inactivity_worker())
     
     # Webhook setup
-    await bot.set_webhook(f"https://your-railway-url.up.railway.app/webhook")  # Замените на ваш URL Railway
+    await bot.set_webhook(f"https://vet-bot.up.railway.app/webhook")
     
     # Создание веб-приложения
     app = web.Application()
