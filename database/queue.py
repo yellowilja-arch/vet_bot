@@ -1,22 +1,25 @@
 import redis
 from config import REDIS_URL, TOPICS
-from database.db import get_db
+from database.db import get_db, _db_lock
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
+
 
 async def add_to_queue(topic: str, user_id: int, anonymous_id: str):
     """Добавляет клиента в очередь (SQLite + Redis)"""
     db = await get_db()
-    cursor = await db.execute('''
-        INSERT INTO queue (topic, user_id, anonymous_id, status)
-        VALUES (?, ?, ?, 'waiting')
-    ''', (topic, user_id, anonymous_id))
-    await db.commit()
-    queue_id = cursor.lastrowid
+    async with _db_lock:
+        cursor = await db.execute('''
+            INSERT INTO queue (topic, user_id, anonymous_id, status)
+            VALUES (?, ?, ?, 'waiting')
+        ''', (topic, user_id, anonymous_id))
+        await db.commit()
+        queue_id = cursor.lastrowid
     
     r.rpush(f"queue:{topic}", f"{user_id}:{anonymous_id}:{queue_id}")
     r.sadd(f"queue_set:{topic}", user_id)
     return r.llen(f"queue:{topic}")
+
 
 async def pop_from_queue(topic: str):
     """Извлекает клиента из очереди (Redis + SQLite)"""
@@ -34,15 +37,27 @@ async def pop_from_queue(topic: str):
     queue_id = int(parts[2])
     
     db = await get_db()
-    await db.execute('UPDATE queue SET status = "processed" WHERE id = ?', (queue_id,))
-    await db.commit()
-    r.srem(f"queue_set:{topic}", user_id)
+    async with _db_lock:
+        # Меняем статус на 'processing', а не удаляем
+        await db.execute('UPDATE queue SET status = "processing" WHERE id = ?', (queue_id,))
+        await db.commit()
+        r.srem(f"queue_set:{topic}", user_id)
     
     return user_id, anonymous_id, queue_id
+
+
+async def confirm_queue_processed(queue_id: int):
+    """Подтверждает успешную обработку клиента из очереди"""
+    db = await get_db()
+    async with _db_lock:
+        await db.execute('UPDATE queue SET status = "processed" WHERE id = ?', (queue_id,))
+        await db.commit()
+
 
 async def get_queue_length(topic: str):
     """Возвращает длину очереди"""
     return r.llen(f"queue:{topic}")
+
 
 async def restore_queue_from_db():
     """Восстанавливает очередь из SQLite при старте"""
@@ -51,6 +66,7 @@ async def restore_queue_from_db():
         r.delete(f"queue:{topic}")
         r.delete(f"queue_set:{topic}")
         
+        # Восстанавливаем 'waiting'
         cursor = await db.execute('''
             SELECT user_id, anonymous_id, id FROM queue
             WHERE topic = ? AND status = 'waiting'
@@ -60,4 +76,19 @@ async def restore_queue_from_db():
         for user_id, anonymous_id, queue_id in rows:
             r.rpush(f"queue:{topic}", f"{user_id}:{anonymous_id}:{queue_id}")
             r.sadd(f"queue_set:{topic}", user_id)
+        
+        # 'processing' старше 60 секунд — возвращаем в очередь
+        cursor = await db.execute('''
+            SELECT user_id, anonymous_id, id FROM queue
+            WHERE topic = ? AND status = 'processing' 
+            AND created_at < datetime('now', '-60 seconds')
+            ORDER BY id
+        ''', (topic,))
+        rows = await cursor.fetchall()
+        for user_id, anonymous_id, queue_id in rows:
+            r.rpush(f"queue:{topic}", f"{user_id}:{anonymous_id}:{queue_id}")
+            r.sadd(f"queue_set:{topic}", user_id)
+            await db.execute('UPDATE queue SET status = "waiting" WHERE id = ?', (queue_id,))
+        await db.commit()
+        
         print(f"🔄 Восстановлена очередь {topic}: {len(rows)} клиентов")
