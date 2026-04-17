@@ -9,12 +9,12 @@ def get_doctor_main_keyboard():
         [InlineKeyboardButton(text="📊 Статус", callback_data="show_status")]
     ])
 
-def get_doctor_status_keyboard():
+def get_doctor_status_keyboard(has_active_client: bool = False):
     """Клавиатура для просмотра статуса"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Очередь", callback_data="view_queue")],
-        [InlineKeyboardButton(text="❌ Завершить текущего", callback_data="end_current")],
-    ])
+    buttons = [[InlineKeyboardButton(text="📋 Очередь", callback_data="view_queue")]]
+    if has_active_client:
+        buttons.append([InlineKeyboardButton(text="❌ Завершить текущего", callback_data="end_current")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_doctor_actions_keyboard(user_id):
     """Клавиатура для действий врача во время консультации"""
