@@ -1,6 +1,6 @@
 from database.db import get_db
 from services.validators import has_active_consultation
-from services.routing import get_doctor_name
+from database.doctors import get_doctor_name
 
 async def save_consultation_start(client_id: int, anonymous_id: str, doctor_id: int, specialization: str):
     """Сохраняет начало консультации, возвращает consultation_id"""
