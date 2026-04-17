@@ -20,6 +20,10 @@ router = Router()
 # ============================================
 # ДИАГНОСТИКА
 # ============================================
+@router.message()
+async def catch_all(message: Message):
+    print(f"🔍 catch_all: {message.text}")
+    
 @router.message(Command("fixme"))
 async def fix_me(message: Message):
     user_id = message.from_user.id
