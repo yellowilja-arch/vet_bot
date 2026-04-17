@@ -29,7 +29,8 @@ async def safe_send_message(chat_id, text, retries=3, **kwargs):
         await asyncio.sleep(e.retry_after)
         return await safe_send_message(chat_id, text, retries=retries - 1, **kwargs)
     except Exception as e:
-        print(f"Ошибка: {e}")
+        import logging
+        logging.error(f"Ошибка отправки в {chat_id}: {e}")
         return None
 
 async def safe_send_photo(chat_id, photo, caption=None, retries=3, **kwargs):

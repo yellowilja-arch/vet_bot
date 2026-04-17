@@ -6,7 +6,7 @@ load_dotenv()
 # Telegram
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
-ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
+ADMIN_IDS = [1092230808]  # Временная установка для тестирования
 PHONE_NUMBER = os.getenv("PHONE_NUMBER", "+79256530940")
 
 # Yandex Cloud (бэкапы)
