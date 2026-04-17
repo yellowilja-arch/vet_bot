@@ -27,28 +27,37 @@ async def fix_me(message: Message):
         await message.answer("⛔ Не для тебя")
         return
     
-    # Добавляем себя в Redis как врача
-    r.set(f"doctor:{user_id}:topic", "dentistry")
-    
-    # Добавляем в БД, если нет
     from database.db import get_db
     db = await get_db()
-    await db.execute('''
-        INSERT OR IGNORE INTO doctors (telegram_id, name, specialization, is_active)
-        VALUES (?, ?, ?, 1)
-    ''', (user_id, "Корнев Михаил", "dentistry"))
+    
+    # Очищаем старых врачей (если есть)
+    await db.execute("DELETE FROM doctors")
+    
+    # Добавляем врачей напрямую
+    doctors_data = [
+        (1092230808, "Корнев Михаил", "dentistry"),
+        (222222222, "Сидоров Алексей", "surgery"),
+        (1906114179, "Васильева Елена", "therapy"),
+    ]
+    
+    for tg_id, name, spec in doctors_data:
+        await db.execute('''
+            INSERT OR REPLACE INTO doctors (telegram_id, name, specialization, is_active)
+            VALUES (?, ?, ?, 1)
+        ''', (tg_id, name, spec))
     await db.commit()
     
-    # ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ DOCTOR_IDS
+    # Принудительно загружаем DOCTOR_IDS
     from database.doctors import load_doctors_from_db
     await load_doctors_from_db()
     
-    # ПРЯМАЯ ПРОВЕРКА
-    from services.validators import DOCTOR_IDS
-    print(f"🔍 DOCTOR_IDS после обновления: {DOCTOR_IDS}")
+    # Устанавливаем специализацию в Redis
+    r.set(f"doctor:{user_id}:topic", "dentistry")
+    r.set(f"doctor:222222222:topic", "surgery")
+    r.set(f"doctor:1906114179:topic", "therapy")
     
-    await message.answer(f"✅ Ты добавлен как врач! DOCTOR_IDS: {DOCTOR_IDS}")
-@router.message(Command("testdoc"))
+    from services.validators import DOCTOR_IDS
+    await message.answer(f"✅ Врачи добавлены! DOCTOR_IDS: {DOCTOR_IDS}")@router.message(Command("testdoc"))
 async def test_doc_common(message: Message):
     await message.answer("testdoc from common")
 
