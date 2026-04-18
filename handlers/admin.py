@@ -2,7 +2,7 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
-from config import ADMIN_IDS, DOCTOR_IDS, TOPICS
+from config import ADMIN_IDS, DOCTOR_IDS
 from services.validators import is_doctor, get_doctor_status
 from services.reset_tools import reset_user_state, reset_all_states, close_stuck_requests, unlock_all_doctors
 from database.users import get_user_info, get_recent_users
@@ -110,7 +110,8 @@ async def health_check(message: Message):
     online_doctors = sum(1 for d in DOCTOR_IDS if get_doctor_status(d) == "online")
     
     queue_lengths = {}
-    for topic in TOPICS.keys():
+    from data.problems import SPECIALISTS
+    for topic in SPECIALISTS.keys():
         queue_lengths[topic] = await get_queue_length(topic)
     
     text = f"🩺 <b>Здоровье бота</b>\n\n"
