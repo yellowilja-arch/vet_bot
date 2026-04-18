@@ -23,6 +23,7 @@ async def get_db():
                 await _db_pool.execute("PRAGMA busy_timeout=5000")
         return _db_pool
 
+
 async def init_db():
     db = await get_db()
     
@@ -70,6 +71,51 @@ async def init_db():
         )
     ''')
     
+    # Добавляем колонку problem_key, если её нет
+    try:
+        await db.execute('ALTER TABLE consultations ADD COLUMN problem_key TEXT')
+        print("✅ Колонка problem_key добавлена")
+    except:
+        print("ℹ️ Колонка problem_key уже существует")
+    
+    # Добавляем колонки для опросника, если их нет
+    try:
+        await db.execute('ALTER TABLE consultations ADD COLUMN pet_species TEXT')
+        print("✅ Колонка pet_species добавлена")
+    except:
+        pass
+    
+    try:
+        await db.execute('ALTER TABLE consultations ADD COLUMN pet_age TEXT')
+        print("✅ Колонка pet_age добавлена")
+    except:
+        pass
+    
+    try:
+        await db.execute('ALTER TABLE consultations ADD COLUMN pet_weight TEXT')
+        print("✅ Колонка pet_weight добавлена")
+    except:
+        pass
+    
+    try:
+        await db.execute('ALTER TABLE consultations ADD COLUMN pet_breed TEXT')
+        print("✅ Колонка pet_breed добавлена")
+    except:
+        pass
+    
+    try:
+        await db.execute('ALTER TABLE consultations ADD COLUMN pet_condition TEXT')
+        print("✅ Колонка pet_condition добавлена")
+    except:
+        pass
+    
+    try:
+        await db.execute('ALTER TABLE consultations ADD COLUMN pet_chronic TEXT')
+        print("✅ Колонка pet_chronic добавлена")
+    except:
+        pass
+    
+    # Уникальный индекс для активных консультаций
     await db.execute('''
         CREATE UNIQUE INDEX IF NOT EXISTS idx_active_client
         ON consultations(client_id) WHERE status = 'active'
@@ -149,6 +195,12 @@ async def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    
+    # Добавляем колонку doctor_name, если её нет
+    try:
+        await db.execute('ALTER TABLE consultations ADD COLUMN doctor_name TEXT')
+    except:
+        pass
     
     await db.commit()
     print("✅ База данных SQLite инициализирована")
