@@ -68,7 +68,6 @@ async def confirm_payment_command(message: Message, state: FSMContext):
     
     client_id = int(args[1])
     
-    # Находим платёж
     payment = await get_pending_payment(client_id)
     if not payment:
         await safe_send_message(doctor_id, "❌ Платёж не найден или уже подтверждён")
@@ -76,19 +75,16 @@ async def confirm_payment_command(message: Message, state: FSMContext):
     
     payment_id, consultation_id = payment
     
-    # Подтверждаем оплату
     if await confirm_payment(client_id, consultation_id):
         await safe_send_message(client_id, "✅ Оплата подтверждена!")
         await safe_send_message(doctor_id, "✅ Оплата подтверждена")
         
-        # Сохраняем данные для опросника
         await state.update_data(
             consultation_id=consultation_id,
             doctor_id=doctor_id,
             problem_name="Консультация"
         )
         
-        # Начинаем опросник
         from keyboards.client import get_species_keyboard
         await state.set_state(QuestionnaireState.waiting_species)
         await safe_send_message(
@@ -105,7 +101,6 @@ async def confirm_payment_command(message: Message, state: FSMContext):
 
 @router.message(Command("next"))
 async def next_command(message: Message):
-    """Взять следующего клиента из очереди"""
     user_id = message.from_user.id
     if not await is_doctor(user_id):
         return
@@ -114,13 +109,11 @@ async def next_command(message: Message):
         await safe_send_message(user_id, "⚠️ У вас уже есть активный клиент. Завершите его сначала.")
         return
     
-    # Ищем клиента в очереди
     client_id, anonymous_id, queue_id = await pop_from_queue("all")
     if not client_id:
         await safe_send_message(user_id, "📭 В очереди нет клиентов.")
         return
     
-    # Находим консультацию
     from database.db import get_db
     db = await get_db()
     cursor = await db.execute('''
@@ -136,7 +129,6 @@ async def next_command(message: Message):
     
     consultation_id, problem_key = row
     
-    # Назначаем врача
     doctor_name = await get_doctor_name(user_id)
     await update_consultation_doctor(consultation_id, user_id, doctor_name)
     
@@ -152,7 +144,6 @@ async def next_command(message: Message):
 
 @router.message(Command("end"))
 async def end_command(message: Message):
-    """Завершить текущую консультацию"""
     user_id = message.from_user.id
     if await is_doctor(user_id):
         current_client = get_current_client(user_id)
@@ -235,11 +226,13 @@ async def show_status_callback(call: CallbackQuery):
     await call.answer()
 
 
+# ПЕРЕСЫЛКА СООБЩЕНИЙ ТОЛЬКО ОТ ВРАЧА
 @router.message()
 async def chat_messages(message: Message):
-    """Пересылка сообщений между клиентом и врачом"""
+    """Пересылка сообщений от врача к клиенту"""
     user_id = message.from_user.id
     
+    # ТОЛЬКО ДЛЯ ВРАЧЕЙ
     if not await is_doctor(user_id):
         return
     
