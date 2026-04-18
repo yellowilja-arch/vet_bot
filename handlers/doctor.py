@@ -6,6 +6,7 @@ r = redis.from_url(REDIS_URL, decode_responses=True)
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
+from aiogram.fsm.context import FSMContext
 from config import SPECIALISTS
 from services.validators import is_doctor, get_doctor_status, get_current_client, set_doctor_status, set_current_client, update_doctor_activity, clear_session
 from services.routing import get_doctor_by_specialization
