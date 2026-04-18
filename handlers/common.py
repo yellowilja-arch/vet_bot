@@ -33,11 +33,9 @@ async def start_command(message: Message, state: FSMContext):
         await safe_send_message(user_id, "⛔ Ваш аккаунт заблокирован.")
         return
     
-    # Сначала удаляем старую клавиатуру
     await message.answer("✅ Обновление панели", reply_markup=ReplyKeyboardRemove())
     
     if await is_admin(user_id):
-        # Панель администратора
         await safe_send_message(
             user_id,
             "👨‍💼 <b>Панель администратора</b>\n\n"
@@ -53,7 +51,6 @@ async def start_command(message: Message, state: FSMContext):
             parse_mode="HTML"
         )
     elif await is_doctor(user_id):
-        # Панель врача
         await safe_send_message(
             user_id,
             "👨‍⚕️ <b>Панель врача</b>\n\n"
@@ -67,7 +64,6 @@ async def start_command(message: Message, state: FSMContext):
             parse_mode="HTML"
         )
     else:
-        # Панель клиента
         await save_user_if_new(user_id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)
         await safe_send_message(
             user_id,
@@ -75,3 +71,6 @@ async def start_command(message: Message, state: FSMContext):
             reply_markup=get_main_keyboard(),
             parse_mode="HTML"
         )
+
+
+print("✅ common.py ЗАГРУЖЕН, router создан")
