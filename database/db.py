@@ -120,6 +120,10 @@ async def init_db():
         CREATE UNIQUE INDEX IF NOT EXISTS idx_active_client
         ON consultations(client_id) WHERE status = 'active'
     ''')
+    await db.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_open_client_consultation
+        ON consultations(client_id) WHERE status IN ('waiting_payment', 'paid', 'active')
+    ''')
     
     # Платежи
     await db.execute('''
@@ -146,6 +150,10 @@ async def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    await db.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_waiting_queue
+        ON queue(topic, user_id) WHERE status = 'waiting'
+    ''')
     
     # Оценки врачей
     await db.execute('''
@@ -158,6 +166,10 @@ async def init_db():
             comment TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
+    ''')
+    await db.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_rating_per_consultation
+        ON doctor_ratings(client_id, consultation_id)
     ''')
     
     # Обращения в поддержку

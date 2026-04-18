@@ -13,7 +13,7 @@ async def notify_admin(message: str, parse_mode="HTML"):
 async def notify_admin_startup():
     """Уведомляет о запуске бота"""
     from database.db import get_db
-    from services.validators import DOCTOR_IDS
+    from database.doctors import DOCTOR_IDS
     db = await get_db()
     cursor = await db.execute('SELECT COUNT(*) FROM consultations WHERE status = "active"')
     active_count = (await cursor.fetchone())[0]

@@ -2,11 +2,12 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
-from config import ADMIN_IDS, DOCTOR_IDS
+from html import escape
+from config import ADMIN_IDS
 from services.validators import is_doctor, get_doctor_status
 from services.reset_tools import reset_user_state, reset_all_states, close_stuck_requests, unlock_all_doctors
 from database.users import get_user_info, get_recent_users
-from database.doctors import add_doctor, remove_doctor, get_all_doctors
+from database.doctors import add_doctor, remove_doctor, get_all_doctors, DOCTOR_IDS
 from database.queue import get_queue_length
 from database.db import get_db
 from utils.helpers import safe_send_message
@@ -18,6 +19,13 @@ from config import REDIS_URL
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
 router = Router()
+
+
+def _parse_int(value: str):
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 @router.message(Command("stats"))
@@ -49,7 +57,10 @@ async def ban_user(message: Message):
         await safe_send_message(user_id, "⚠️ /ban <user_id> [причина]")
         return
     
-    target_id = int(args[1])
+    target_id = _parse_int(args[1])
+    if target_id is None:
+        await safe_send_message(user_id, "⚠️ user_id должен быть числом")
+        return
     reason = " ".join(args[2:]) if len(args) > 2 else None
     
     db = await get_db()
@@ -71,7 +82,10 @@ async def unban_user(message: Message):
         await safe_send_message(user_id, "⚠️ /unban <user_id>")
         return
     
-    target_id = int(args[1])
+    target_id = _parse_int(args[1])
+    if target_id is None:
+        await safe_send_message(user_id, "⚠️ user_id должен быть числом")
+        return
     
     db = await get_db()
     await db.execute('DELETE FROM blacklist WHERE user_id = ?', (target_id,))
@@ -109,10 +123,7 @@ async def health_check(message: Message):
     
     online_doctors = sum(1 for d in DOCTOR_IDS if get_doctor_status(d) == "online")
     
-    queue_lengths = {}
-    from data.problems import SPECIALISTS
-    for topic in SPECIALISTS.keys():
-        queue_lengths[topic] = await get_queue_length(topic)
+    queue_lengths = {"all": await get_queue_length("all")}
     
     text = f"🩺 <b>Здоровье бота</b>\n\n"
     text += f"Redis: {redis_status}\n"
@@ -141,7 +152,11 @@ async def get_user(message: Message):
     if identifier.startswith("@"):
         cursor = await db.execute('SELECT * FROM users WHERE username = ?', (identifier[1:],))
     else:
-        cursor = await db.execute('SELECT * FROM users WHERE user_id = ?', (int(identifier),))
+        numeric_id = _parse_int(identifier)
+        if numeric_id is None:
+            await safe_send_message(user_id, "⚠️ user_id должен быть числом или @username")
+            return
+        cursor = await db.execute('SELECT * FROM users WHERE user_id = ?', (numeric_id,))
     
     user = await cursor.fetchone()
     
@@ -170,7 +185,10 @@ async def reset_user(message: Message):
         await safe_send_message(user_id, "⚠️ /resetuser <user_id>")
         return
     
-    target_id = int(args[1])
+    target_id = _parse_int(args[1])
+    if target_id is None:
+        await safe_send_message(user_id, "⚠️ user_id должен быть числом")
+        return
     await reset_user_state(target_id)
     await safe_send_message(user_id, f"✅ Состояние пользователя {target_id} сброшено")
 
@@ -216,7 +234,10 @@ async def add_doctor_command(message: Message):
         await safe_send_message(user_id, "⚠️ /adddoctor <telegram_id> <имя> <specialization>")
         return
     
-    telegram_id = int(args[1])
+    telegram_id = _parse_int(args[1])
+    if telegram_id is None:
+        await safe_send_message(user_id, "⚠️ telegram_id должен быть числом")
+        return
     name = args[2]
     specialization = args[3]
     
@@ -240,7 +261,10 @@ async def remove_doctor_command(message: Message):
         await safe_send_message(user_id, "⚠️ /removedoctor <telegram_id>")
         return
     
-    telegram_id = int(args[1])
+    telegram_id = _parse_int(args[1])
+    if telegram_id is None:
+        await safe_send_message(user_id, "⚠️ telegram_id должен быть числом")
+        return
     await remove_doctor(telegram_id)
     await safe_send_message(user_id, f"✅ Врач {telegram_id} удалён из системы")
 
@@ -279,7 +303,7 @@ async def process_feedback(message: Message, state: FSMContext):
             admin_id,
             f"📬 <b>НОВАЯ ОБРАТНАЯ СВЯЗЬ</b>\n\n"
             f"👤 От: @{username} (ID: {user_id})\n"
-            f"📝 Текст:\n<pre>{message.text}</pre>",
+            f"📝 Текст:\n<pre>{escape(message.text or '')}</pre>",
             parse_mode="HTML"
         )
     
@@ -295,8 +319,11 @@ async def reply_to_support(call: CallbackQuery, state: FSMContext):
         return
     
     parts = call.data.split(":")
-    user_id = int(parts[1])
-    request_id = int(parts[2])
+    user_id = _parse_int(parts[1])
+    request_id = _parse_int(parts[2])
+    if user_id is None or request_id is None:
+        await call.answer("❌ Некорректные параметры")
+        return
     
     await state.update_data(reply_to_user=user_id, reply_request_id=request_id)
     await state.set_state(WaitingState.waiting_for_support_reply)
@@ -315,7 +342,7 @@ async def send_support_reply(message: Message, state: FSMContext):
     request_id = data.get("reply_request_id")
     
     if user_id:
-        await safe_send_message(user_id, f"📬 <b>Ответ администрации</b>\n\n{message.text}", parse_mode="HTML")
+        await safe_send_message(user_id, f"📬 <b>Ответ администрации</b>\n\n{escape(message.text or '')}", parse_mode="HTML")
         
         db = await get_db()
         await db.execute('UPDATE support_requests SET status = "replied", resolved_at = CURRENT_TIMESTAMP WHERE id = ?', (request_id,))

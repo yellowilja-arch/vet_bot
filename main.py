@@ -1,12 +1,15 @@
 import asyncio
 import signal
 import sys
+from html import escape
 from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.redis import RedisStorage
+import redis.asyncio as redis_async
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from config import BOT_TOKEN, ADMIN_IDS, REDIS_URL
 from handlers import register_handlers
-from backups import backup_worker
-from inactivity import inactivity_worker
+from workers.backups import backup_worker
+from workers.inactivity import inactivity_worker
 from utils.helpers import safe_send_message
 from database.db import get_db
 import logging
@@ -14,7 +17,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+redis_client = redis_async.from_url(REDIS_URL, decode_responses=True)
+dp = Dispatcher(storage=RedisStorage(redis=redis_client))
 
 logging.info(f"🔑 Загруженные администраторы: {ADMIN_IDS}")
 
@@ -24,7 +28,7 @@ async def global_error_handler(*args, exception=None, **kwargs):
         exception = args[1]
     logging.error(f"Глобальная ошибка: {exception}")
     for admin_id in ADMIN_IDS:
-        await safe_send_message(admin_id, f"❌ Глобальная ошибка бота:\n<pre>{exception}</pre>", parse_mode="HTML")
+        await safe_send_message(admin_id, f"❌ Глобальная ошибка бота:\n<pre>{escape(str(exception))}</pre>", parse_mode="HTML")
     return True
 
 async def init_startup():
@@ -84,6 +88,7 @@ async def main():
 
 async def shutdown():
     logging.info("Завершение работы...")
+    await redis_client.aclose()
     await bot.session.close()
     sys.exit(0)
 

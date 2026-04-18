@@ -7,6 +7,7 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey
 from config import SPECIALISTS
 from services.validators import is_doctor, get_doctor_status, get_current_client, set_doctor_status, set_current_client, update_doctor_activity, clear_session
 from services.routing import get_doctor_by_specialization
@@ -66,7 +67,11 @@ async def confirm_payment_command(message: Message, state: FSMContext):
         await safe_send_message(doctor_id, "⚠️ Использование: /confirm_payment <user_id>")
         return
     
-    client_id = int(args[1])
+    try:
+        client_id = int(args[1])
+    except ValueError:
+        await safe_send_message(doctor_id, "⚠️ user_id должен быть числом")
+        return
     
     payment = await get_pending_payment(client_id)
     if not payment:
@@ -78,21 +83,23 @@ async def confirm_payment_command(message: Message, state: FSMContext):
     if await confirm_payment(client_id, consultation_id):
         await safe_send_message(client_id, "✅ Оплата подтверждена!")
         await safe_send_message(doctor_id, "✅ Оплата подтверждена")
-        
-        await state.update_data(
+
+        client_state = FSMContext(
+            storage=state.storage,
+            key=StorageKey(
+                bot_id=message.bot.id,
+                chat_id=client_id,
+                user_id=client_id
+            )
+        )
+        await client_state.update_data(
             consultation_id=consultation_id,
-            doctor_id=doctor_id,
             problem_name="Консультация"
         )
-        
+
         from keyboards.client import get_species_keyboard
-        await state.set_state(QuestionnaireState.waiting_species)
-        
-        # ДИАГНОСТИКА
-        print(f"🔍 Состояние установлено: {await state.get_state()}")
-        print(f"🔍 Данные состояния: {await state.get_data()}")
-        print(f"🔍 Клиент ID: {client_id}")
-        
+        await client_state.set_state(QuestionnaireState.waiting_species)
+
         await safe_send_message(
             client_id,
             "📋 <b>Пожалуйста, заполните информацию о питомце</b>\n\n"

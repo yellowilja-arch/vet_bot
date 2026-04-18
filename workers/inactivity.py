@@ -1,7 +1,8 @@
 import asyncio
 import time
 import redis
-from config import REDIS_URL, DOCTOR_IDS, INACTIVITY_DOCTOR_SECONDS, INACTIVITY_CLIENT_SECONDS
+from config import REDIS_URL, INACTIVITY_DOCTOR_SECONDS, INACTIVITY_CLIENT_SECONDS
+from database.doctors import DOCTOR_IDS
 from services.validators import get_current_client, set_current_client, clear_session
 from database.consultations import save_consultation_end
 from utils.helpers import safe_send_message

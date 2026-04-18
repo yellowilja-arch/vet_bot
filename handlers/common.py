@@ -23,6 +23,3 @@ async def reset_state(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("✅ Состояние сброшено. Напишите /start")
 
-
-
-print("✅ common.py ЗАГРУЖЕН, router создан")

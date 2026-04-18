@@ -8,8 +8,24 @@ r = redis.from_url(REDIS_URL, decode_responses=True)
 
 async def add_to_queue(topic: str, user_id: int, anonymous_id: str):
     """Добавляет клиента в очередь (SQLite + Redis)"""
+    if r.sismember(f"queue_set:{topic}", user_id):
+        return await get_queue_position(topic, user_id) or r.llen(f"queue:{topic}")
+
     db = await get_db()
     async with _db_lock:
+        cursor = await db.execute('''
+            SELECT id FROM queue
+            WHERE topic = ? AND user_id = ? AND status = 'waiting'
+            ORDER BY id DESC LIMIT 1
+        ''', (topic, user_id))
+        existing = await cursor.fetchone()
+        if existing:
+            queue_id = existing[0]
+            if not r.sismember(f"queue_set:{topic}", user_id):
+                r.rpush(f"queue:{topic}", f"{user_id}:{anonymous_id}:{queue_id}")
+                r.sadd(f"queue_set:{topic}", user_id)
+            return await get_queue_position(topic, user_id) or r.llen(f"queue:{topic}")
+
         cursor = await db.execute('''
             INSERT INTO queue (topic, user_id, anonymous_id, status)
             VALUES (?, ?, ?, 'waiting')

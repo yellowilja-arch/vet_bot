@@ -2,14 +2,15 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
+from html import escape
 from config import PHONE_NUMBER
 from data.problems import CATEGORIES, PROBLEMS, SPECIALISTS
-from services.validators import is_blocked, is_doctor, has_active_consultation, get_doctor_status, update_client_activity
+from services.validators import is_blocked, is_doctor
 from services.routing import get_doctor_by_specialization
 from database.queue import add_to_queue
-from database.consultations import save_consultation_start, save_consultation_end
-from database.payments import save_payment, confirm_payment
-from database.doctors import get_doctor_name
+from database.consultations import save_consultation_start
+from database.payments import save_payment
+from database.users import save_user_if_new
 from utils.helpers import safe_send_message, safe_send_photo, get_anonymous_id
 from keyboards.client import (
     get_main_keyboard, get_category_problems_keyboard, get_problem_info_keyboard,
@@ -23,29 +24,15 @@ router = Router()
 
 @router.message(Command("start"))
 async def start_command(message: Message, state: FSMContext):
-    # ========== ДИАГНОСТИКА ==========
-    print(f"🔍🔍🔍 /start ВЫЗВАН в client.py")
-    print(f"🔍 user_id: {message.from_user.id}")
-    print(f"🔍 username: {message.from_user.username}")
-    print(f"🔍 is_doctor: {await is_doctor(message.from_user.id)}")
-    print(f"🔍 is_blocked: {await is_blocked(message.from_user.id)}")
-    # =================================
-    
     await state.clear()
     user_id = message.from_user.id
+    await save_user_if_new(message.from_user)
     
     if await is_blocked(user_id):
         await safe_send_message(user_id, "⛔ Ваш аккаунт заблокирован.")
         return
     
     if await is_doctor(user_id):
-        # Врачам показываем панель врача
-        from keyboards.doctor import get_doctor_main_keyboard
-        await safe_send_message(
-            user_id,
-            "👨‍⚕️ Панель врача",
-            reply_markup=get_doctor_main_keyboard()
-        )
         return
     
     await safe_send_message(
@@ -241,7 +228,7 @@ async def handle_receipt(message: Message, state: FSMContext):
         print(f"❌ Ошибка в handle_receipt: {error_text}")
         from config import ADMIN_IDS
         for admin_id in ADMIN_IDS:
-            await safe_send_message(admin_id, f"❌ Ошибка при обработке чека:\n<pre>{error_text}</pre>", parse_mode="HTML")
+            await safe_send_message(admin_id, f"❌ Ошибка при обработке чека:\n<pre>{escape(error_text)}</pre>", parse_mode="HTML")
         await safe_send_message(user_id, "❌ Произошла ошибка при обработке чека. Пожалуйста, попробуйте снова.")
 
 
@@ -252,69 +239,8 @@ async def cancel_payment(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-@router.message(Command("confirm_payment"))
-async def confirm_payment_command(message: Message, state: FSMContext):
-    doctor_id = message.from_user.id
-    if not await is_doctor(doctor_id):
-        await safe_send_message(doctor_id, "⛔ Только для врачей")
-        return
-    
-    args = message.text.split()
-    if len(args) != 2:
-        await safe_send_message(doctor_id, "⚠️ Использование: /confirm_payment <user_id>")
-        return
-    
-    client_id = int(args[1])
-    
-    from database.db import get_db
-    db = await get_db()
-    cursor = await db.execute('''
-        SELECT id, consultation_id FROM payments
-        WHERE client_id = ? AND status = "pending"
-        ORDER BY id DESC LIMIT 1
-    ''', (client_id,))
-    row = await cursor.fetchone()
-    
-    if not row:
-        await safe_send_message(doctor_id, "❌ Платёж не найден")
-        return
-    
-    payment_id, consultation_id = row
-    
-    if await confirm_payment(client_id, consultation_id):
-        await safe_send_message(client_id, "✅ Оплата подтверждена!")
-        await safe_send_message(doctor_id, "✅ Оплата подтверждена")
-        
-        await state.update_data(consultation_id=consultation_id, doctor_id=doctor_id)
-        await state.set_state(QuestionnaireState.waiting_species)
-        
-        # ДИАГНОСТИКА
-        print(f"🔍 Состояние установлено: {await state.get_state()}")
-        print(f"🔍 Данные состояния: {await state.get_data()}")
-        print(f"🔍 Клиент ID: {client_id}")
-        
-        await safe_send_message(
-            client_id,
-            "📋 <b>Пожалуйста, заполните информацию о питомце</b>\n\n"
-            "Выберите вид животного:",
-            reply_markup=get_species_keyboard(),
-            parse_mode="HTML"
-        )
-    else:
-        await safe_send_message(doctor_id, "❌ Ошибка подтверждения")
-        await safe_send_message(client_id, "❌ Ошибка подтверждения оплаты")
-
-
-# ============================================
-# ОПРОСНИК
-# ============================================
-
 @router.message(QuestionnaireState.waiting_species)
 async def process_species(message: Message, state: FSMContext):
-    print(f"🔍🔍🔍 process_species ВЫЗВАН! Текст: {message.text}")
-    print(f"🔍 Текущее состояние: {await state.get_state()}")
-    print(f"🔍 User ID: {message.from_user.id}")
-    
     species = message.text
     if species == "❌ Отмена":
         await state.clear()
@@ -416,7 +342,7 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     condition = data.get("condition", "Не указана")
     chronic = data.get("chronic", "Не указано")
     consultation_id = data.get("consultation_id")
-    doctor_id = data.get("doctor_id")
+    anonymous_id = data.get("anonymous_id", "anon")
     
     from database.db import get_db
     db = await get_db()
@@ -427,8 +353,7 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
             pet_weight = ?,
             pet_breed = ?,
             pet_condition = ?,
-            pet_chronic = ?,
-            status = 'active'
+            pet_chronic = ?
         WHERE id = ?
     ''', (species, age, weight, breed, condition, chronic, consultation_id))
     await db.commit()
@@ -446,13 +371,12 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
         f"💊 Хронические заболевания: {chronic}\n"
     )
     
-    if doctor_id:
-        await safe_send_message(doctor_id, vet_message, parse_mode="HTML")
-        await safe_send_message(doctor_id, "💬 Напишите сообщение клиенту, чтобы начать консультацию.")
+    queue_position = await add_to_queue("all", message.from_user.id, anonymous_id)
     
     await safe_send_message(
         message.from_user.id,
         "✅ Информация о питомце передана врачу!\n\n"
+        f"Вы добавлены в очередь. Позиция: {queue_position}.\n"
         "Врач скоро свяжется с вами.",
         reply_markup=ReplyKeyboardRemove()
     )
@@ -471,7 +395,7 @@ async def rate_doctor(call: CallbackQuery):
     from database.db import get_db
     db = await get_db()
     await db.execute('''
-        INSERT INTO doctor_ratings (doctor_id, client_id, consultation_id, rating)
+        INSERT OR IGNORE INTO doctor_ratings (doctor_id, client_id, consultation_id, rating)
         VALUES (?, ?, ?, ?)
     ''', (doctor_id, user_id, consultation_id, rating))
     await db.commit()
@@ -560,7 +484,7 @@ async def forward_to_admin(message: Message, state: FSMContext):
             f"📬 <b>НОВОЕ ОБРАЩЕНИЕ В ПОДДЕРЖКУ</b>\n\n"
             f"👤 От: @{username} (ID: {user_id})\n"
             f"🆔 #{request_id}\n"
-            f"📝 Текст:\n<pre>{message.text}</pre>",
+            f"📝 Текст:\n<pre>{escape(message.text or '')}</pre>",
             parse_mode="HTML"
         )
     

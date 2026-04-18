@@ -1,5 +1,6 @@
 import redis
-from config import REDIS_URL, DOCTOR_IDS
+from config import REDIS_URL
+from database.doctors import DOCTOR_IDS
 from database.db import get_db
 from services.validators import set_doctor_status
 
