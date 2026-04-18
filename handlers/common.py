@@ -9,7 +9,7 @@ from database.doctors import get_all_doctors
 from database.queue import get_queue_length
 from database.users import save_user_if_new
 from utils.helpers import safe_send_message, safe_send_photo, get_anonymous_id
-from keyboards.client import get_client_main_keyboard
+from keyboards.client import get_main_keyboard
 from keyboards.doctor import get_doctor_main_keyboard, get_doctor_status_keyboard
 from keyboards.admin import get_admin_main_keyboard
 from states.forms import PaymentState
@@ -71,6 +71,7 @@ async def start_command(message: Message, state: FSMContext):
         await save_user_if_new(user_id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)
         await safe_send_message(
             user_id,
-            "🐾 Добро пожаловать в онлайн-консультации ветклиники!\n\nВыберите специалиста:",
-            reply_markup=get_client_main_keyboard()
+            "🐾 Добро пожаловать в онлайн-консультации ветклиники!\n\nВыберите категорию проблемы:",
+            reply_markup=get_main_keyboard(),
+            parse_mode="HTML"
         )
