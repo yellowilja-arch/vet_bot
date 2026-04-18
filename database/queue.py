@@ -59,6 +59,54 @@ async def get_queue_length(topic: str):
     return r.llen(f"queue:{topic}")
 
 
+async def get_queue_items(topic: str, limit: int = 10):
+    """Возвращает список клиентов в очереди"""
+    queue_key = f"queue:{topic}"
+    items = r.lrange(queue_key, 0, limit - 1)
+    result = []
+    for item in items:
+        parts = item.split(":")
+        if len(parts) == 3:
+            result.append((int(parts[0]), parts[1], int(parts[2])))
+    return result
+
+
+async def get_queue_position(topic: str, user_id: int):
+    """Возвращает позицию пользователя в очереди"""
+    queue_key = f"queue:{topic}"
+    queue = r.lrange(queue_key, 0, -1)
+    for i, item in enumerate(queue):
+        parts = item.split(":")
+        if len(parts) == 3 and int(parts[0]) == user_id:
+            return i + 1
+    return None
+
+
+async def remove_from_queue(topic: str, user_id: int):
+    """Удаляет пользователя из очереди"""
+    queue_key = f"queue:{topic}"
+    set_key = f"queue_set:{topic}"
+    
+    # Удаляем из Redis
+    queue = r.lrange(queue_key, 0, -1)
+    for item in queue:
+        parts = item.split(":")
+        if len(parts) == 3 and int(parts[0]) == user_id:
+            r.lrem(queue_key, 1, item)
+            break
+    
+    r.srem(set_key, user_id)
+    
+    # Обновляем статус в SQLite
+    db = await get_db()
+    async with _db_lock:
+        await db.execute('''
+            UPDATE queue SET status = "cancelled"
+            WHERE user_id = ? AND status = "waiting"
+        ''', (user_id,))
+        await db.commit()
+
+
 async def restore_queue_from_db():
     """Восстанавливает очередь из SQLite при старте"""
     db = await get_db()
@@ -92,3 +140,20 @@ async def restore_queue_from_db():
         await db.commit()
         
         print(f"🔄 Восстановлена очередь {topic}: {len(rows)} клиентов")
+
+
+async def clear_queue(topic: str):
+    """Очищает всю очередь (для админов)"""
+    queue_key = f"queue:{topic}"
+    set_key = f"queue_set:{topic}"
+    
+    r.delete(queue_key)
+    r.delete(set_key)
+    
+    db = await get_db()
+    async with _db_lock:
+        await db.execute('''
+            UPDATE queue SET status = "cancelled"
+            WHERE topic = ? AND status = "waiting"
+        ''', (topic,))
+        await db.commit()

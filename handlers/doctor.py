@@ -6,23 +6,18 @@ r = redis.from_url(REDIS_URL, decode_responses=True)
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
-from config import TOPICS
+from config import SPECIALISTS
 from services.validators import is_doctor, get_doctor_status, get_current_client, set_doctor_status, set_current_client, update_doctor_activity, clear_session
-from services.routing import get_doctor
-from database.queue import add_to_queue, pop_from_queue, get_queue_length, confirm_queue_processed
-from database.consultations import save_consultation_start, save_consultation_end, update_consultation_doctor, get_user_consultations
+from services.routing import get_doctor_by_specialization
+from database.queue import pop_from_queue, get_queue_length, confirm_queue_processed
+from database.consultations import update_consultation_doctor, save_consultation_end
 from database.payments import confirm_payment, get_pending_payment
 from database.doctors import get_doctor_name
 from utils.helpers import safe_send_message, get_anonymous_id
-from keyboards.doctor import get_doctor_main_keyboard, get_doctor_status_keyboard, get_doctor_actions_keyboard, get_end_confirmation_keyboard, get_transfer_menu_keyboard
-from states.forms import PaymentState
+from keyboards.doctor import get_doctor_main_keyboard, get_doctor_status_keyboard, get_doctor_actions_keyboard
+from states.forms import QuestionnaireState
 
 router = Router()
-
-
-@router.message(Command("testdoc"))
-async def test_doctor(message: Message):
-    await message.answer("doctor router works!")
 
 
 @router.message(Command("online"))
@@ -47,95 +42,116 @@ async def show_status(message: Message):
     if not await is_doctor(user_id):
         return
     
-    topic = r.get(f"doctor:{user_id}:topic")
     current = get_current_client(user_id)
-    queue_len = await get_queue_length(topic) if topic else 0
+    queue_len = await get_queue_length("all")
     
-    text = f"📊 Статус: {get_doctor_status(user_id)}\nСпециализация: {TOPICS.get(topic, '?')}\n"
-    text += f"👤 Текущий клиент: {current or 'нет'}\n📋 Очередь: {queue_len}"
+    text = f"📊 Статус: {get_doctor_status(user_id)}\n"
+    text += f"👤 Текущий клиент: {current or 'нет'}\n📋 В очереди: {queue_len}"
     
     has_client = current is not None
     await safe_send_message(user_id, text, reply_markup=get_doctor_status_keyboard(has_client))
 
 
+@router.message(Command("confirm_payment"))
+async def confirm_payment_command(message: Message, state: FSMContext):
+    """Врач подтверждает оплату клиента"""
+    doctor_id = message.from_user.id
+    if not await is_doctor(doctor_id):
+        await safe_send_message(doctor_id, "⛔ Только для врачей")
+        return
+    
+    args = message.text.split()
+    if len(args) != 2:
+        await safe_send_message(doctor_id, "⚠️ Использование: /confirm_payment <user_id>")
+        return
+    
+    client_id = int(args[1])
+    
+    # Находим платёж
+    payment = await get_pending_payment(client_id)
+    if not payment:
+        await safe_send_message(doctor_id, "❌ Платёж не найден или уже подтверждён")
+        return
+    
+    payment_id, consultation_id = payment
+    
+    # Подтверждаем оплату
+    if await confirm_payment(client_id, consultation_id):
+        await safe_send_message(client_id, "✅ Оплата подтверждена!")
+        await safe_send_message(doctor_id, "✅ Оплата подтверждена")
+        
+        # Сохраняем данные для опросника
+        await state.update_data(
+            consultation_id=consultation_id,
+            doctor_id=doctor_id,
+            problem_name="Консультация"
+        )
+        
+        # Начинаем опросник
+        from keyboards.client import get_species_keyboard
+        await state.set_state(QuestionnaireState.waiting_species)
+        await safe_send_message(
+            client_id,
+            "📋 <b>Пожалуйста, заполните информацию о питомце</b>\n\n"
+            "Выберите вид животного:",
+            reply_markup=get_species_keyboard(),
+            parse_mode="HTML"
+        )
+    else:
+        await safe_send_message(doctor_id, "❌ Ошибка подтверждения")
+        await safe_send_message(client_id, "❌ Ошибка подтверждения оплаты")
+
+
 @router.message(Command("next"))
 async def next_command(message: Message):
+    """Взять следующего клиента из очереди"""
     user_id = message.from_user.id
     if not await is_doctor(user_id):
         return
     
     if get_current_client(user_id):
-        await safe_send_message(user_id, "⚠️ У вас уже есть активный клиент.")
+        await safe_send_message(user_id, "⚠️ У вас уже есть активный клиент. Завершите его сначала.")
         return
     
-    topic = r.get(f"doctor:{user_id}:topic")
-    if not topic:
-        await safe_send_message(user_id, "❌ Не удалось определить специализацию.")
-        return
-    
-    doctor_lock = f"lock:doctor_pick:{topic}"
-    if not r.set(doctor_lock, "1", nx=True, ex=2):
-        await safe_send_message(user_id, "⏳ Подождите секунду, обрабатываю...")
-        return
-    
-    try:
-        while True:
-            client_id, anonymous_id, queue_id = await pop_from_queue(topic)
-            if not client_id:
-                break
-            
-            client_lock = f"lock:client_pick:{client_id}"
-            if not r.set(client_lock, "1", nx=True, ex=5):
-                from database.db import get_db
-                db = await get_db()
-                await db.execute('UPDATE queue SET status = "waiting" WHERE id = ?', (queue_id,))
-                r.rpush(f"queue:{topic}", f"{client_id}:{anonymous_id}:{queue_id}")
-                r.sadd(f"queue_set:{topic}", client_id)
-                continue
-            
-            try:
-                from services.validators import is_payment_confirmed
-                
-                consultation_id = None
-                from database.db import get_db
-                db = await get_db()
-                cursor = await db.execute('''
-                    SELECT id FROM consultations 
-                    WHERE client_id = ? AND status IN ('waiting_payment', 'paid')
-                    ORDER BY id DESC LIMIT 1
-                ''', (client_id,))
-                row = await cursor.fetchone()
-                if row:
-                    consultation_id = row[0]
-                
-                if not consultation_id or not await is_payment_confirmed(consultation_id):
-                    await db.execute('UPDATE queue SET status = "waiting" WHERE id = ?', (queue_id,))
-                    r.rpush(f"queue:{topic}", f"{client_id}:{anonymous_id}:{queue_id}")
-                    r.sadd(f"queue_set:{topic}", client_id)
-                    continue
-                
-                doctor_name = await get_doctor_name(user_id)
-                await update_consultation_doctor(consultation_id, user_id, doctor_name)
-                
-                set_current_client(user_id, client_id)
-                r.set(f"client:{client_id}:doctor", user_id)
-                
-                await confirm_queue_processed(queue_id)
-                
-                await safe_send_message(client_id, f"✅ Врач принял заявку! Ваш ID: {anonymous_id}")
-                await safe_send_message(user_id, f"✅ Клиент {anonymous_id} принят")
-                update_doctor_activity(user_id)
-                return
-            finally:
-                r.delete(client_lock)
-        
+    # Ищем клиента в очереди
+    client_id, anonymous_id, queue_id = await pop_from_queue("all")
+    if not client_id:
         await safe_send_message(user_id, "📭 В очереди нет клиентов.")
-    finally:
-        r.delete(doctor_lock)
+        return
+    
+    # Находим консультацию
+    from database.db import get_db
+    db = await get_db()
+    cursor = await db.execute('''
+        SELECT id, problem_key FROM consultations 
+        WHERE client_id = ? AND status = "paid"
+        ORDER BY id DESC LIMIT 1
+    ''', (client_id,))
+    row = await cursor.fetchone()
+    
+    if not row:
+        await safe_send_message(user_id, "❌ Консультация не найдена")
+        return
+    
+    consultation_id, problem_key = row
+    
+    # Назначаем врача
+    doctor_name = await get_doctor_name(user_id)
+    await update_consultation_doctor(consultation_id, user_id, doctor_name)
+    
+    set_current_client(user_id, client_id)
+    r.set(f"client:{client_id}:doctor", user_id)
+    
+    await confirm_queue_processed(queue_id)
+    
+    await safe_send_message(client_id, f"✅ Врач принял заявку! Консультация начинается.")
+    await safe_send_message(user_id, f"✅ Клиент принят. Напишите сообщение.")
+    update_doctor_activity(user_id)
 
 
 @router.message(Command("end"))
 async def end_command(message: Message):
+    """Завершить текущую консультацию"""
     user_id = message.from_user.id
     if await is_doctor(user_id):
         current_client = get_current_client(user_id)
@@ -186,20 +202,15 @@ async def view_queue_callback(call: CallbackQuery):
     if not await is_doctor(doctor_id):
         await call.answer("⛔ Только для врачей")
         return
-    topic = r.get(f"doctor:{doctor_id}:topic")
-    if not topic:
-        await safe_send_message(doctor_id, "❌ Не удалось определить специализацию.")
-        await call.answer()
-        return
-    queue_len = await get_queue_length(topic)
+    
+    queue_len = await get_queue_length("all")
     if queue_len == 0:
         await safe_send_message(doctor_id, "📭 Очередь пуста.")
     else:
-        queue_items = r.lrange(f"queue:{topic}", 0, 9)
+        from database.queue import get_queue_items
+        items = await get_queue_items("all", limit=10)
         text = f"📋 ОЧЕРЕДЬ ({queue_len}):\n\n"
-        for i, item in enumerate(queue_items):
-            parts = item.split(":")
-            anonymous_id = parts[1] if len(parts) > 1 else "???"
+        for i, (client_id, anonymous_id, queue_id) in enumerate(items):
             text += f"{i+1}. {anonymous_id}\n"
         await safe_send_message(doctor_id, text)
     await call.answer()
@@ -211,11 +222,29 @@ async def show_status_callback(call: CallbackQuery):
     if not await is_doctor(doctor_id):
         await call.answer("⛔ Только для врачей")
         return
-    topic = r.get(f"doctor:{doctor_id}:topic")
+    
     current = get_current_client(doctor_id)
-    queue_len = await get_queue_length(topic) if topic else 0
-    text = f"📊 Статус: {get_doctor_status(doctor_id)}\nСпециализация: {TOPICS.get(topic, '?')}\n"
+    queue_len = await get_queue_length("all")
+    
+    text = f"📊 Статус: {get_doctor_status(doctor_id)}\n"
     text += f"👤 Текущий клиент: {current or 'нет'}\n📋 Очередь: {queue_len}"
+    
     has_client = current is not None
     await call.message.edit_text(text, reply_markup=get_doctor_status_keyboard(has_client))
     await call.answer()
+
+
+@router.message()
+async def chat_messages(message: Message):
+    """Пересылка сообщений между клиентом и врачом"""
+    user_id = message.from_user.id
+    
+    if not await is_doctor(user_id):
+        return
+    
+    current_client = get_current_client(user_id)
+    if not current_client:
+        return
+    
+    await safe_send_message(int(current_client), f"👨‍⚕️ Врач: {message.text}")
+    update_doctor_activity(user_id)
