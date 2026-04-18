@@ -4,7 +4,8 @@ from config import REDIS_URL
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
 from aiogram import Router, F
-from aiogram.filters import Command
+from aiogram.filters import Command, BaseFilter
+from aiogram.enums import MessageEntityType
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
@@ -20,6 +21,22 @@ from keyboards.doctor import get_doctor_main_keyboard, get_doctor_status_keyboar
 from states.forms import QuestionnaireState
 
 router = Router()
+
+
+def _not_a_bot_command(message: Message) -> bool:
+    """Не перехватывать команды (/start и т.д.) — их обрабатывает client_router."""
+    ents = message.entities or []
+    if ents and ents[0].offset == 0 and ents[0].type == MessageEntityType.BOT_COMMAND:
+        return False
+    text = message.text or ""
+    if text.lstrip().startswith("/"):
+        return False
+    return True
+
+
+class NotBotCommandFilter(BaseFilter):
+    async def __call__(self, message: Message) -> bool:
+        return _not_a_bot_command(message)
 
 
 @router.message(Command("online"))
@@ -239,8 +256,8 @@ async def show_status_callback(call: CallbackQuery):
     await call.answer()
 
 
-# Без ~Command() этот хендлер съедает /start и любые команды до client_router — клиент не получает ответ.
-@router.message(~Command())
+# Нельзя использовать ~Command() без аргументов — в aiogram это ValueError.
+@router.message(NotBotCommandFilter())
 async def chat_messages(message: Message):
     user_id = message.from_user.id
     if not await is_doctor(user_id):
