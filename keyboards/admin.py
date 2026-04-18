@@ -1,4 +1,4 @@
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 def get_admin_main_keyboard():
     """Главная панель администратора"""
@@ -11,3 +11,11 @@ def get_admin_main_keyboard():
         ],
         resize_keyboard=True
     )
+
+
+def get_admin_support_keyboard(request_id, user_id):
+    """Клавиатура для обработки обращений в поддержку"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Отмечено", callback_data=f"support_done:{request_id}")],
+        [InlineKeyboardButton(text="📝 Ответить", callback_data=f"support_reply:{user_id}:{request_id}")],
+    ])
