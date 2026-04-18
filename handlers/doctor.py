@@ -21,6 +21,12 @@ from states.forms import QuestionnaireState
 router = Router()
 
 
+
+@router.message(Command("start"))
+async def doctor_start_catch(message: Message):
+    print("🔍 /start перехвачен doctor_router")
+    await message.answer("start перехвачен doctor")
+
 @router.message(Command("online"))
 async def go_online(message: Message):
     user_id = message.from_user.id
