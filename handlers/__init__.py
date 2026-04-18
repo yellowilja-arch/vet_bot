@@ -4,10 +4,6 @@ from .doctor import router as doctor_router
 from .admin import router as admin_router
 
 print("✅ __init__.py ЗАГРУЖЕН, роутеры импортированы")
-print(f"   common_router маршрутов: {len(common_router.routes)}")
-print(f"   admin_router маршрутов: {len(admin_router.routes)}")
-print(f"   doctor_router маршрутов: {len(doctor_router.routes)}")
-print(f"   client_router маршрутов: {len(client_router.routes)}")
 
 def register_handlers(dp):
     print("✅ register_handlers ВЫЗВАН")
