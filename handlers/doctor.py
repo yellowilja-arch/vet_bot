@@ -239,7 +239,8 @@ async def show_status_callback(call: CallbackQuery):
     await call.answer()
 
 
-@router.message()
+# Без ~Command() этот хендлер съедает /start и любые команды до client_router — клиент не получает ответ.
+@router.message(~Command())
 async def chat_messages(message: Message):
     user_id = message.from_user.id
     if not await is_doctor(user_id):
