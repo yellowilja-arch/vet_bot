@@ -87,6 +87,12 @@ async def confirm_payment_command(message: Message, state: FSMContext):
         
         from keyboards.client import get_species_keyboard
         await state.set_state(QuestionnaireState.waiting_species)
+        
+        # ДИАГНОСТИКА
+        print(f"🔍 Состояние установлено: {await state.get_state()}")
+        print(f"🔍 Данные состояния: {await state.get_data()}")
+        print(f"🔍 Клиент ID: {client_id}")
+        
         await safe_send_message(
             client_id,
             "📋 <b>Пожалуйста, заполните информацию о питомце</b>\n\n"
@@ -226,19 +232,13 @@ async def show_status_callback(call: CallbackQuery):
     await call.answer()
 
 
-# ПЕРЕСЫЛКА СООБЩЕНИЙ ТОЛЬКО ОТ ВРАЧА
 @router.message()
 async def chat_messages(message: Message):
-    """Пересылка сообщений от врача к клиенту"""
     user_id = message.from_user.id
-    
-    # ТОЛЬКО ДЛЯ ВРАЧЕЙ
     if not await is_doctor(user_id):
         return
-    
     current_client = get_current_client(user_id)
     if not current_client:
         return
-    
     await safe_send_message(int(current_client), f"👨‍⚕️ Врач: {message.text}")
     update_doctor_activity(user_id)

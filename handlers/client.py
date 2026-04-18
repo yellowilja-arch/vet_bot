@@ -21,10 +21,6 @@ from states.forms import PaymentState, QuestionnaireState, WaitingState
 router = Router()
 
 
-# ============================================
-# ГЛАВНОЕ МЕНЮ (КАТЕГОРИИ)
-# ============================================
-
 @router.message(Command("start"))
 async def start_command(message: Message, state: FSMContext):
     await state.clear()
@@ -35,7 +31,6 @@ async def start_command(message: Message, state: FSMContext):
         return
     
     if await is_doctor(user_id):
-        # Врач → панель врача (в другом файле)
         return
     
     await safe_send_message(
@@ -51,9 +46,7 @@ async def start_command(message: Message, state: FSMContext):
                F.text.contains("🦷") | F.text.contains("🐱") | F.text.contains("🤰") |
                F.text.contains("🆘") | F.text.contains("👨‍⚕️"))
 async def select_category(message: Message, state: FSMContext):
-    """Выбор категории из главного меню"""
     user_id = message.from_user.id
-    
     if await is_doctor(user_id):
         return
     
@@ -76,15 +69,9 @@ async def select_category(message: Message, state: FSMContext):
     )
 
 
-# ============================================
-# ВЫБОР ПРОБЛЕМЫ
-# ============================================
-
 @router.message(lambda m: m.text in [p["name"] for p in PROBLEMS.values()])
 async def select_problem(message: Message, state: FSMContext):
-    """Выбор конкретной проблемы"""
     user_id = message.from_user.id
-    
     if await is_doctor(user_id):
         return
     
@@ -99,14 +86,12 @@ async def select_problem(message: Message, state: FSMContext):
     
     prob_data = PROBLEMS[selected_problem]
     
-    # Формируем список специалистов
     specialists_list = []
     for spec in prob_data.get("specialists", []):
         specialists_list.append(SPECIALISTS.get(spec, spec))
     
     specialists_text = ", ".join(specialists_list) if specialists_list else "Любой специалист"
     
-    # Сохраняем данные
     await state.update_data(
         selected_problem=selected_problem,
         problem_name=prob_data["name"],
@@ -115,7 +100,6 @@ async def select_problem(message: Message, state: FSMContext):
         problem_description=prob_data.get("description", "")
     )
     
-    # Проверяем, экстренный ли случай
     if prob_data.get("urgent", False):
         urgent_text = "\n\n⚠️ <b>Это экстренный случай! Врач свяжется с вами в ближайшее время.</b>"
     else:
@@ -133,13 +117,8 @@ async def select_problem(message: Message, state: FSMContext):
     )
 
 
-# ============================================
-# ОПЛАТА
-# ============================================
-
 @router.callback_query(lambda c: c.data.startswith("pay_problem:"))
 async def pay_problem(call: CallbackQuery, state: FSMContext):
-    """Начало оплаты для выбранной проблемы"""
     problem_key = call.data.split(":")[1]
     prob_data = PROBLEMS[problem_key]
     
@@ -165,7 +144,6 @@ async def pay_problem(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(lambda c: c.data == "paid_confirm")
 async def paid_confirm(call: CallbackQuery, state: FSMContext):
-    """Клиент нажал 'Я оплатил'"""
     await call.message.edit_text(
         "📎 Отправьте скриншот или фото чека.\n\n"
         "Чек должен содержать сумму, дату и номер телефона.",
@@ -179,7 +157,6 @@ async def paid_confirm(call: CallbackQuery, state: FSMContext):
 
 @router.message(PaymentState.waiting_receipt, F.photo)
 async def handle_receipt(message: Message, state: FSMContext):
-    """Приём чека от клиента"""
     try:
         user_id = message.from_user.id
         data = await state.get_data()
@@ -193,17 +170,14 @@ async def handle_receipt(message: Message, state: FSMContext):
         prob_data = PROBLEMS[problem_key]
         anonymous_id = get_anonymous_id(problem_key, user_id)
         
-        # Сохраняем консультацию
         consultation_id = await save_consultation_start(user_id, anonymous_id, None, problem_key)
         if not consultation_id:
             await safe_send_message(user_id, "❌ Ошибка: не удалось создать консультацию.")
             await state.clear()
             return
         
-        # Сохраняем платёж
         await save_payment(user_id, consultation_id, message.photo[-1].file_id)
         
-        # Уведомляем врачей (в зависимости от специализации)
         specialists = prob_data.get("specialists", [])
         notified = False
         
@@ -258,19 +232,13 @@ async def handle_receipt(message: Message, state: FSMContext):
 
 @router.callback_query(lambda c: c.data == "cancel_payment")
 async def cancel_payment(call: CallbackQuery, state: FSMContext):
-    """Отмена оплаты"""
     await state.clear()
     await call.message.edit_text("❌ Оплата отменена. Напишите /start для начала.")
     await call.answer()
 
 
-# ============================================
-# ПОДТВЕРЖДЕНИЕ ОПЛАТЫ ВРАЧОМ
-# ============================================
-
 @router.message(Command("confirm_payment"))
 async def confirm_payment_command(message: Message, state: FSMContext):
-    """Врач подтверждает оплату"""
     doctor_id = message.from_user.id
     if not await is_doctor(doctor_id):
         await safe_send_message(doctor_id, "⛔ Только для врачей")
@@ -302,9 +270,14 @@ async def confirm_payment_command(message: Message, state: FSMContext):
         await safe_send_message(client_id, "✅ Оплата подтверждена!")
         await safe_send_message(doctor_id, "✅ Оплата подтверждена")
         
-        # Переходим к опроснику
         await state.update_data(consultation_id=consultation_id, doctor_id=doctor_id)
         await state.set_state(QuestionnaireState.waiting_species)
+        
+        # ДИАГНОСТИКА
+        print(f"🔍 Состояние установлено: {await state.get_state()}")
+        print(f"🔍 Данные состояния: {await state.get_data()}")
+        print(f"🔍 Клиент ID: {client_id}")
+        
         await safe_send_message(
             client_id,
             "📋 <b>Пожалуйста, заполните информацию о питомце</b>\n\n"
@@ -323,7 +296,10 @@ async def confirm_payment_command(message: Message, state: FSMContext):
 
 @router.message(QuestionnaireState.waiting_species)
 async def process_species(message: Message, state: FSMContext):
-    """Вид животного"""
+    print(f"🔍🔍🔍 process_species ВЫЗВАН! Текст: {message.text}")
+    print(f"🔍 Текущее состояние: {await state.get_state()}")
+    print(f"🔍 User ID: {message.from_user.id}")
+    
     species = message.text
     if species == "❌ Отмена":
         await state.clear()
@@ -342,7 +318,6 @@ async def process_species(message: Message, state: FSMContext):
 
 @router.message(QuestionnaireState.waiting_age)
 async def process_age(message: Message, state: FSMContext):
-    """Возраст"""
     age = message.text
     await state.update_data(age=age)
     await state.set_state(QuestionnaireState.waiting_weight)
@@ -356,7 +331,6 @@ async def process_age(message: Message, state: FSMContext):
 
 @router.message(QuestionnaireState.waiting_weight)
 async def process_weight(message: Message, state: FSMContext):
-    """Вес"""
     weight = message.text
     await state.update_data(weight=weight)
     await state.set_state(QuestionnaireState.waiting_breed)
@@ -370,7 +344,6 @@ async def process_weight(message: Message, state: FSMContext):
 
 @router.message(QuestionnaireState.waiting_breed)
 async def process_breed(message: Message, state: FSMContext):
-    """Порода"""
     breed = message.text
     await state.update_data(breed=breed)
     await state.set_state(QuestionnaireState.waiting_condition)
@@ -384,7 +357,6 @@ async def process_breed(message: Message, state: FSMContext):
 
 @router.message(QuestionnaireState.waiting_condition)
 async def process_condition(message: Message, state: FSMContext):
-    """Упитанность"""
     condition = message.text
     if condition == "❌ Отмена":
         await state.clear()
@@ -406,7 +378,6 @@ async def process_condition(message: Message, state: FSMContext):
 
 @router.callback_query(lambda c: c.data == "no_chronic")
 async def no_chronic(call: CallbackQuery, state: FSMContext):
-    """Нет хронических заболеваний"""
     await state.update_data(chronic="Нет")
     await call.message.delete()
     await send_pet_info_to_doctor(call.message, state)
@@ -415,14 +386,12 @@ async def no_chronic(call: CallbackQuery, state: FSMContext):
 
 @router.message(QuestionnaireState.waiting_chronic)
 async def process_chronic(message: Message, state: FSMContext):
-    """Хронические заболевания"""
     chronic = message.text
     await state.update_data(chronic=chronic)
     await send_pet_info_to_doctor(message, state)
 
 
 async def send_pet_info_to_doctor(message: Message, state: FSMContext):
-    """Отправляет информацию о питомце врачу"""
     data = await state.get_data()
     
     species = data.get("species", "Не указан")
@@ -476,10 +445,6 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     await state.clear()
 
 
-# ============================================
-# ОЦЕНКА ВРАЧА
-# ============================================
-
 @router.callback_query(lambda c: c.data.startswith("rate:"))
 async def rate_doctor(call: CallbackQuery):
     data = call.data.split(":")
@@ -506,10 +471,6 @@ async def skip_rating(call: CallbackQuery):
     await call.answer()
 
 
-# ============================================
-# МОИ КОНСУЛЬТАЦИИ
-# ============================================
-
 @router.message(F.text == "📋 Мои консультации")
 @router.message(Command("my_consultations"))
 async def my_consultations(message: Message):
@@ -534,10 +495,6 @@ async def my_consultations(message: Message):
     
     await safe_send_message(user_id, text, parse_mode="HTML")
 
-
-# ============================================
-# ПОМОЩЬ
-# ============================================
 
 @router.message(F.text == "🆘 Помощь")
 async def help_button(message: Message):
@@ -595,10 +552,6 @@ async def forward_to_admin(message: Message, state: FSMContext):
     await safe_send_message(user_id, "✅ Ваше сообщение отправлено администратору.")
     await state.clear()
 
-
-# ============================================
-# НАЗАД
-# ============================================
 
 @router.message(F.text == "🔙 Назад")
 async def back_to_previous(message: Message, state: FSMContext):
