@@ -1,5 +1,5 @@
 import redis
-from config import REDIS_URL, INITIAL_DOCTORS, TOPICS
+from config import REDIS_URL, INITIAL_DOCTORS
 from database.db import get_db
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
