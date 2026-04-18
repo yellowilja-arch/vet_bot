@@ -23,6 +23,14 @@ router = Router()
 
 @router.message(Command("start"))
 async def start_command(message: Message, state: FSMContext):
+    # ========== ДИАГНОСТИКА ==========
+    print(f"🔍🔍🔍 /start ВЫЗВАН в client.py")
+    print(f"🔍 user_id: {message.from_user.id}")
+    print(f"🔍 username: {message.from_user.username}")
+    print(f"🔍 is_doctor: {await is_doctor(message.from_user.id)}")
+    print(f"🔍 is_blocked: {await is_blocked(message.from_user.id)}")
+    # =================================
+    
     await state.clear()
     user_id = message.from_user.id
     
@@ -31,6 +39,13 @@ async def start_command(message: Message, state: FSMContext):
         return
     
     if await is_doctor(user_id):
+        # Врачам показываем панель врача
+        from keyboards.doctor import get_doctor_main_keyboard
+        await safe_send_message(
+            user_id,
+            "👨‍⚕️ Панель врача",
+            reply_markup=get_doctor_main_keyboard()
+        )
         return
     
     await safe_send_message(
