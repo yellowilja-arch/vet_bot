@@ -9,5 +9,6 @@ def register_handlers(dp):
     print("✅ register_handlers ВЫЗВАН")
     dp.include_router(common_router)
     dp.include_router(admin_router)
-    dp.include_router(doctor_router)
+    # client до doctor: кнопки меню и сценарии клиента не перехватываются relay-хендлером врача
     dp.include_router(client_router)
+    dp.include_router(doctor_router)

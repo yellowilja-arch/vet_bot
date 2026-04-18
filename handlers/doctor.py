@@ -34,9 +34,13 @@ def _not_a_bot_command(message: Message) -> bool:
     return True
 
 
-class NotBotCommandFilter(BaseFilter):
+class DoctorToClientTextFilter(BaseFilter):
+    """Только сообщения врача (не команды). Иначе апдейт уходит в client_router — кнопки меню."""
+
     async def __call__(self, message: Message) -> bool:
-        return _not_a_bot_command(message)
+        if not _not_a_bot_command(message):
+            return False
+        return await is_doctor(message.from_user.id)
 
 
 @router.message(Command("online"))
@@ -257,11 +261,9 @@ async def show_status_callback(call: CallbackQuery):
 
 
 # Нельзя использовать ~Command() без аргументов — в aiogram это ValueError.
-@router.message(NotBotCommandFilter())
+@router.message(DoctorToClientTextFilter())
 async def chat_messages(message: Message):
     user_id = message.from_user.id
-    if not await is_doctor(user_id):
-        return
     current_client = get_current_client(user_id)
     if not current_client:
         return
