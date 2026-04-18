@@ -5,8 +5,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from config import BOT_TOKEN, ADMIN_IDS, REDIS_URL
 from handlers import register_handlers
-from workers.backups import backup_worker
-from workers.inactivity import inactivity_worker
+from backups import backup_worker
+from inactivity import inactivity_worker
 from utils.helpers import safe_send_message
 from database.db import get_db
 import logging

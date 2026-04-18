@@ -24,11 +24,5 @@ async def reset_state(message: Message, state: FSMContext):
     await message.answer("✅ Состояние сброшено. Напишите /start")
 
 
-# ВРЕМЕННЫЙ УПРОЩЁННЫЙ /start ДЛЯ ДИАГНОСТИКИ
-@router.message(Command("start"))
-async def start_command(message: Message, state: FSMContext):
-    print("🔍 /start ВЫЗВАН в common.py")
-    await message.answer("start работает!")
-
 
 print("✅ common.py ЗАГРУЖЕН, router создан")
