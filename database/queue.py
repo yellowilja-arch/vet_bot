@@ -1,6 +1,7 @@
 import redis
-from config import REDIS_URL, TOPICS
+from config import REDIS_URL
 from database.db import get_db, _db_lock
+from data.problems import SPECIALISTS
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -38,7 +39,6 @@ async def pop_from_queue(topic: str):
     
     db = await get_db()
     async with _db_lock:
-        # Меняем статус на 'processing', а не удаляем
         await db.execute('UPDATE queue SET status = "processing" WHERE id = ?', (queue_id,))
         await db.commit()
         r.srem(f"queue_set:{topic}", user_id)
@@ -87,7 +87,6 @@ async def remove_from_queue(topic: str, user_id: int):
     queue_key = f"queue:{topic}"
     set_key = f"queue_set:{topic}"
     
-    # Удаляем из Redis
     queue = r.lrange(queue_key, 0, -1)
     for item in queue:
         parts = item.split(":")
@@ -97,7 +96,6 @@ async def remove_from_queue(topic: str, user_id: int):
     
     r.srem(set_key, user_id)
     
-    # Обновляем статус в SQLite
     db = await get_db()
     async with _db_lock:
         await db.execute('''
@@ -110,11 +108,10 @@ async def remove_from_queue(topic: str, user_id: int):
 async def restore_queue_from_db():
     """Восстанавливает очередь из SQLite при старте"""
     db = await get_db()
-    for topic in TOPICS.keys():
+    for topic in SPECIALISTS.keys():
         r.delete(f"queue:{topic}")
         r.delete(f"queue_set:{topic}")
         
-        # Восстанавливаем 'waiting'
         cursor = await db.execute('''
             SELECT user_id, anonymous_id, id FROM queue
             WHERE topic = ? AND status = 'waiting'
@@ -125,7 +122,6 @@ async def restore_queue_from_db():
             r.rpush(f"queue:{topic}", f"{user_id}:{anonymous_id}:{queue_id}")
             r.sadd(f"queue_set:{topic}", user_id)
         
-        # 'processing' старше 60 секунд — возвращаем в очередь
         cursor = await db.execute('''
             SELECT user_id, anonymous_id, id FROM queue
             WHERE topic = ? AND status = 'processing' 
