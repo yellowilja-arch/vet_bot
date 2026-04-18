@@ -17,6 +17,7 @@ from keyboards.client import (
     get_species_keyboard, get_condition_keyboard, get_rating_keyboard,
     get_support_keyboard, get_waiting_keyboard, get_back_keyboard
 )
+from keyboards.doctor import get_doctor_main_keyboard
 from states.forms import PaymentState, QuestionnaireState, WaitingState
 
 router = Router()
@@ -26,13 +27,24 @@ router = Router()
 async def start_command(message: Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
-    await save_user_if_new(message.from_user)
+    u = message.from_user
+    await save_user_if_new(
+        u.id,
+        u.username,
+        u.first_name,
+        u.last_name,
+    )
     
     if await is_blocked(user_id):
         await safe_send_message(user_id, "⛔ Ваш аккаунт заблокирован.")
         return
     
     if await is_doctor(user_id):
+        await safe_send_message(
+            user_id,
+            "👨‍⚕️ Вы зарегистрированы как врач. Панель управления:",
+            reply_markup=get_doctor_main_keyboard(),
+        )
         return
     
     await safe_send_message(
