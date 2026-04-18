@@ -23,6 +23,13 @@ from states.forms import PaymentState, QuestionnaireState, WaitingState
 router = Router()
 
 
+def _client_telegram_id(message: Message) -> int:
+    """В личке у inline-сообщений from_user — бот; получатель — message.chat.id."""
+    if message.chat and message.chat.type == "private":
+        return message.chat.id
+    return message.from_user.id
+
+
 @router.message(Command("start"))
 async def start_command(message: Message, state: FSMContext):
     await state.clear()
@@ -332,9 +339,12 @@ async def process_condition(message: Message, state: FSMContext):
 @router.callback_query(lambda c: c.data == "no_chronic")
 async def no_chronic(call: CallbackQuery, state: FSMContext):
     await state.update_data(chronic="Нет")
-    await call.message.delete()
-    await send_pet_info_to_doctor(call.message, state)
     await call.answer()
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await send_pet_info_to_doctor(call.message, state)
 
 
 @router.message(QuestionnaireState.waiting_chronic)
@@ -383,10 +393,11 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
         f"💊 Хронические заболевания: {chronic}\n"
     )
     
-    queue_position = await add_to_queue("all", message.from_user.id, anonymous_id)
+    uid = _client_telegram_id(message)
+    queue_position = await add_to_queue("all", uid, anonymous_id)
     
     await safe_send_message(
-        message.from_user.id,
+        uid,
         "✅ Информация о питомце передана врачу!\n\n"
         f"Вы добавлены в очередь. Позиция: {queue_position}.\n"
         "Врач скоро свяжется с вами.",
