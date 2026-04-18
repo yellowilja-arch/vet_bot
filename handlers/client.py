@@ -180,71 +180,80 @@ async def paid_confirm(call: CallbackQuery, state: FSMContext):
 @router.message(PaymentState.waiting_receipt, F.photo)
 async def handle_receipt(message: Message, state: FSMContext):
     """Приём чека от клиента"""
-    user_id = message.from_user.id
-    data = await state.get_data()
-    
-    problem_key = data.get("problem_key")
-    if not problem_key:
-        await safe_send_message(user_id, "❌ Ошибка: проблема не выбрана. Начните заново с /start")
-        await state.clear()
-        return
-    
-    prob_data = PROBLEMS[problem_key]
-    anonymous_id = get_anonymous_id(problem_key, user_id)
-    
-    # Сохраняем консультацию
-    consultation_id = await save_consultation_start(user_id, anonymous_id, None, problem_key)
-    if not consultation_id:
-        await safe_send_message(user_id, "❌ Ошибка: не удалось создать консультацию.")
-        await state.clear()
-        return
-    
-    # Сохраняем платёж
-    await save_payment(user_id, consultation_id, message.photo[-1].file_id)
-    
-    # Уведомляем врачей (в зависимости от специализации)
-    specialists = prob_data.get("specialists", [])
-    notified = False
-    
-    for spec in specialists:
-        doctor_id = get_doctor_by_specialization(spec)
-        if doctor_id:
-            await safe_send_photo(
-                doctor_id,
-                message.photo[-1].file_id,
-                caption=f"🧾 <b>НОВЫЙ ЧЕК</b>\n"
-                        f"👤 Клиент: {anonymous_id}\n"
-                        f"📂 Проблема: {prob_data['name']}\n"
-                        f"👨‍⚕️ Специализация: {SPECIALISTS.get(spec, spec)}\n\n"
-                        f"Для подтверждения оплаты используйте:\n"
-                        f"<code>/confirm_payment {user_id}</code>",
-                parse_mode="HTML"
-            )
-            notified = True
-    
-    if not notified:
-        # Если нет подходящего врача — уведомляем админа
+    try:
+        user_id = message.from_user.id
+        data = await state.get_data()
+        
+        problem_key = data.get("problem_key")
+        if not problem_key:
+            await safe_send_message(user_id, "❌ Ошибка: проблема не выбрана. Начните заново с /start")
+            await state.clear()
+            return
+        
+        prob_data = PROBLEMS[problem_key]
+        anonymous_id = get_anonymous_id(problem_key, user_id)
+        
+        # Сохраняем консультацию
+        consultation_id = await save_consultation_start(user_id, anonymous_id, None, problem_key)
+        if not consultation_id:
+            await safe_send_message(user_id, "❌ Ошибка: не удалось создать консультацию.")
+            await state.clear()
+            return
+        
+        # Сохраняем платёж
+        await save_payment(user_id, consultation_id, message.photo[-1].file_id)
+        
+        # Уведомляем врачей (в зависимости от специализации)
+        specialists = prob_data.get("specialists", [])
+        notified = False
+        
+        for spec in specialists:
+            doctor_id = get_doctor_by_specialization(spec)
+            if doctor_id:
+                await safe_send_photo(
+                    doctor_id,
+                    message.photo[-1].file_id,
+                    caption=f"🧾 <b>НОВЫЙ ЧЕК</b>\n"
+                            f"👤 Клиент: {anonymous_id}\n"
+                            f"📂 Проблема: {prob_data['name']}\n"
+                            f"👨‍⚕️ Специализация: {SPECIALISTS.get(spec, spec)}\n\n"
+                            f"Для подтверждения оплаты используйте:\n"
+                            f"<code>/confirm_payment {user_id}</code>",
+                    parse_mode="HTML"
+                )
+                notified = True
+        
+        if not notified:
+            from config import ADMIN_IDS
+            for admin_id in ADMIN_IDS:
+                await safe_send_photo(
+                    admin_id,
+                    message.photo[-1].file_id,
+                    caption=f"🧾 <b>НОВЫЙ ЧЕК (нет подходящего врача)</b>\n"
+                            f"👤 Клиент: {anonymous_id}\n"
+                            f"📂 Проблема: {prob_data['name']}\n"
+                            f"Требуемые специалисты: {', '.join(specialists)}\n\n"
+                            f"<code>/confirm_payment {user_id}</code>",
+                    parse_mode="HTML"
+                )
+        
+        await safe_send_message(
+            user_id,
+            "✅ Чек отправлен врачу. Ожидайте подтверждения оплаты.\n\n"
+            "После подтверждения вам нужно будет заполнить информацию о питомце."
+        )
+        
+        await state.update_data(consultation_id=consultation_id, anonymous_id=anonymous_id)
+        await state.set_state(PaymentState.waiting_confirmation)
+        
+    except Exception as e:
+        import traceback
+        error_text = traceback.format_exc()
+        print(f"❌ Ошибка в handle_receipt: {error_text}")
         from config import ADMIN_IDS
         for admin_id in ADMIN_IDS:
-            await safe_send_photo(
-                admin_id,
-                message.photo[-1].file_id,
-                caption=f"🧾 <b>НОВЫЙ ЧЕК (нет подходящего врача)</b>\n"
-                        f"👤 Клиент: {anonymous_id}\n"
-                        f"📂 Проблема: {prob_data['name']}\n"
-                        f"Требуемые специалисты: {', '.join(specialists)}\n\n"
-                        f"<code>/confirm_payment {user_id}</code>",
-                parse_mode="HTML"
-            )
-    
-    await safe_send_message(
-        user_id,
-        "✅ Чек отправлен врачу. Ожидайте подтверждения оплаты.\n\n"
-        "После подтверждения вам нужно будет заполнить информацию о питомце."
-    )
-    
-    await state.update_data(consultation_id=consultation_id, anonymous_id=anonymous_id)
-    await state.set_state(PaymentState.waiting_confirmation)
+            await safe_send_message(admin_id, f"❌ Ошибка при обработке чека:\n<pre>{error_text}</pre>", parse_mode="HTML")
+        await safe_send_message(user_id, "❌ Произошла ошибка при обработке чека. Пожалуйста, попробуйте снова.")
 
 
 @router.callback_query(lambda c: c.data == "cancel_payment")
@@ -256,7 +265,7 @@ async def cancel_payment(call: CallbackQuery, state: FSMContext):
 
 
 # ============================================
-# ПОДТВЕРЖДЕНИЕ ОПЛАТЫ ВРАЧОМ (временно здесь)
+# ПОДТВЕРЖДЕНИЕ ОПЛАТЫ ВРАЧОМ
 # ============================================
 
 @router.message(Command("confirm_payment"))
@@ -416,7 +425,6 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     """Отправляет информацию о питомце врачу"""
     data = await state.get_data()
     
-    # Получаем данные
     species = data.get("species", "Не указан")
     age = data.get("age", "Не указан")
     weight = data.get("weight", "Не указан")
@@ -426,7 +434,6 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     consultation_id = data.get("consultation_id")
     doctor_id = data.get("doctor_id")
     
-    # Обновляем консультацию в БД
     from database.db import get_db
     db = await get_db()
     await db.execute('''
@@ -442,7 +449,6 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     ''', (species, age, weight, breed, condition, chronic, consultation_id))
     await db.commit()
     
-    # Формируем сообщение для врача
     vet_message = (
         f"🆕 <b>НОВАЯ КОНСУЛЬТАЦИЯ</b>\n\n"
         f"📂 Проблема: {data.get('problem_name', 'Не указана')}\n"
@@ -456,12 +462,10 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
         f"💊 Хронические заболевания: {chronic}\n"
     )
     
-    # Отправляем врачу
     if doctor_id:
         await safe_send_message(doctor_id, vet_message, parse_mode="HTML")
         await safe_send_message(doctor_id, "💬 Напишите сообщение клиенту, чтобы начать консультацию.")
     
-    # Уведомляем клиента
     await safe_send_message(
         message.from_user.id,
         "✅ Информация о питомце передана врачу!\n\n"
@@ -478,7 +482,6 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
 
 @router.callback_query(lambda c: c.data.startswith("rate:"))
 async def rate_doctor(call: CallbackQuery):
-    """Оценка врача"""
     data = call.data.split(":")
     consultation_id = int(data[1])
     doctor_id = int(data[2])
@@ -499,7 +502,6 @@ async def rate_doctor(call: CallbackQuery):
 
 @router.callback_query(lambda c: c.data == "skip_rating")
 async def skip_rating(call: CallbackQuery):
-    """Пропустить оценку"""
     await call.message.edit_text("Оценка пропущена.")
     await call.answer()
 
@@ -511,7 +513,6 @@ async def skip_rating(call: CallbackQuery):
 @router.message(F.text == "📋 Мои консультации")
 @router.message(Command("my_consultations"))
 async def my_consultations(message: Message):
-    """История консультаций клиента"""
     user_id = message.from_user.id
     
     if await is_doctor(user_id):
@@ -540,7 +541,6 @@ async def my_consultations(message: Message):
 
 @router.message(F.text == "🆘 Помощь")
 async def help_button(message: Message):
-    """Кнопка помощи"""
     user_id = message.from_user.id
     
     if await is_doctor(user_id):
@@ -559,7 +559,6 @@ async def help_button(message: Message):
 
 @router.callback_query(lambda c: c.data == "contact_admin")
 async def contact_admin(call: CallbackQuery, state: FSMContext):
-    """Написать администратору"""
     await state.set_state(WaitingState.waiting_for_admin_message)
     await call.message.edit_text(
         "📝 Напишите ваше сообщение администратору.\n\n"
@@ -570,7 +569,6 @@ async def contact_admin(call: CallbackQuery, state: FSMContext):
 
 @router.message(WaitingState.waiting_for_admin_message)
 async def forward_to_admin(message: Message, state: FSMContext):
-    """Пересылка сообщения админу"""
     user_id = message.from_user.id
     username = message.from_user.username or message.from_user.first_name
     
@@ -604,7 +602,6 @@ async def forward_to_admin(message: Message, state: FSMContext):
 
 @router.message(F.text == "🔙 Назад")
 async def back_to_previous(message: Message, state: FSMContext):
-    """Возврат на предыдущий шаг"""
     data = await state.get_data()
     selected_category = data.get("selected_category")
     
@@ -627,7 +624,6 @@ async def back_to_previous(message: Message, state: FSMContext):
 
 @router.callback_query(lambda c: c.data == "back_to_category")
 async def back_to_category(call: CallbackQuery, state: FSMContext):
-    """Возврат к списку проблем категории"""
     data = await state.get_data()
     selected_category = data.get("selected_category")
     
@@ -649,7 +645,6 @@ async def back_to_category(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(lambda c: c.data == "back_to_main")
 async def back_to_main(call: CallbackQuery, state: FSMContext):
-    """Возврат в главное меню"""
     await state.clear()
     await call.message.edit_text(
         "🐾 Выберите категорию проблемы:",
@@ -661,6 +656,5 @@ async def back_to_main(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(lambda c: c.data == "my_cons")
 async def my_cons_callback(call: CallbackQuery):
-    """Мои консультации из callback"""
     await my_consultations(call.message)
     await call.answer()
