@@ -15,7 +15,12 @@ from states.forms import PaymentState
 r = redis.from_url(REDIS_URL, decode_responses=True)
 router = Router()
 
-
+@router.message(Command("reset_state"))
+async def reset_state(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("✅ Состояние сброшено. Напишите /start")
+    
+    
 @router.message(Command("start"))
 async def start_command(message: Message, state: FSMContext):
     await state.clear()
