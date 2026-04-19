@@ -24,6 +24,16 @@ async def get_db():
         return _db_pool
 
 
+async def checkpoint_wal_for_backup() -> None:
+    """
+    Сбрасывает WAL в основной файл vet_bot.db.
+    Без этого копирование только .db при journal_mode=WAL даёт неполный/«пустой» бэкап.
+    """
+    db = await get_db()
+    await db.execute("PRAGMA wal_checkpoint(FULL)")
+    await db.commit()
+
+
 async def init_db():
     db = await get_db()
     
