@@ -4,7 +4,6 @@ from aiogram import Bot
 from aiogram.types import BotCommand, BotCommandScopeChat
 
 from config import ADMIN_IDS
-from data.problems import CATEGORIES
 from services.validators import (
     is_doctor,
     user_in_admin_context,

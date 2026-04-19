@@ -1,8 +1,39 @@
 import redis
 from config import REDIS_URL, DOCTORS
+from database.db import get_db
 from services.validators import get_doctor_status, get_current_client
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
+
+
+async def pick_doctor_for_topic(topic_key: str) -> int | None:
+    """
+    Назначение врача по теме (ключ специализации из БД).
+    Источник — только SQLite doctors, не config.DOCTORS.
+    Приоритет: онлайн без активного клиента, иначе любой онлайн; внутри группы — round-robin.
+    """
+    db = await get_db()
+    cur = await db.execute(
+        """
+        SELECT telegram_id FROM doctors
+        WHERE is_active = 1 AND specialization = ?
+        """,
+        (topic_key,),
+    )
+    tids = [row[0] for row in await cur.fetchall()]
+    if not tids:
+        return None
+    online = [t for t in tids if get_doctor_status(t) == "online"]
+    if not online:
+        return None
+    free = [t for t in online if get_current_client(t) is None]
+    pool = free if free else online
+    pool = sorted(pool)
+    rr_key = f"rr_topic:{topic_key}"
+    idx = int(r.get(rr_key) or 0)
+    chosen = pool[idx % len(pool)]
+    r.set(rr_key, idx + 1)
+    return chosen
 
 
 def get_doctor_by_specialization(specialization: str):
