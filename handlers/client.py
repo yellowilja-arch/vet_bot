@@ -23,13 +23,14 @@ from database.queue import add_to_queue
 from database.consultations import save_consultation_start
 from database.payments import save_payment
 from database.users import save_user_if_new
-from utils.helpers import safe_send_message, safe_send_photo, get_anonymous_id
+from database.support import create_support_ticket, format_user_history
+from utils.helpers import safe_send_message, safe_send_photo, get_anonymous_id, split_text_chunks
 from keyboards.client import (
     get_main_keyboard, get_category_problems_keyboard, get_problem_info_keyboard,
     get_species_keyboard, get_condition_keyboard, get_rating_keyboard,
     get_support_keyboard, get_waiting_keyboard, get_back_keyboard
 )
-from keyboards.admin import get_admin_main_keyboard
+from keyboards.admin import get_admin_main_keyboard, get_admin_support_keyboard
 from keyboards.doctor import (
     get_doctor_main_keyboard,
     get_confirm_payment_inline_keyboard,
@@ -685,8 +686,45 @@ async def contact_admin(call: CallbackQuery, state: FSMContext):
     await state.set_state(WaitingState.waiting_for_admin_message)
     await call.message.edit_text(
         "📝 Напишите ваше сообщение администратору.\n\n"
-        "Опишите проблему. Администратор ответит вам в этот чат."
+        "Опишите проблему. Администратор ответит вам в этот чат.\n\n"
+        "Чтобы отменить — отправьте /cancel."
     )
+    await call.answer()
+
+
+@router.message(Command("cancel"), WaitingState.waiting_for_admin_message)
+async def cancel_admin_message(message: Message, state: FSMContext):
+    await state.clear()
+    await safe_send_message(
+        message.from_user.id,
+        "❌ Отправка сообщения отменена.",
+        reply_markup=get_support_keyboard(),
+    )
+
+
+@router.callback_query(lambda c: c.data == "support_history")
+async def support_history_callback(call: CallbackQuery):
+    user_id = call.from_user.id
+    if not await user_in_client_context(user_id):
+        await call.answer("Сначала переключитесь в режим клиента: /client", show_alert=True)
+        return
+    hist = await format_user_history(user_id, limit=30)
+    if not hist:
+        await safe_send_message(user_id, "📭 Пока нет переписки с поддержкой.")
+    else:
+        escaped = escape(hist)
+        header = "📜 <b>Последние сообщения с поддержкой</b>\n\n"
+        full = header + f"<pre>{escaped}</pre>"
+        if len(full) <= 4000:
+            await safe_send_message(user_id, full, parse_mode="HTML")
+        else:
+            await safe_send_message(
+                user_id,
+                header + "<i>(сообщения разбиты на части)</i>",
+                parse_mode="HTML",
+            )
+            for chunk in split_text_chunks(escaped, 3800):
+                await safe_send_message(user_id, f"<pre>{chunk}</pre>", parse_mode="HTML")
     await call.answer()
 
 
@@ -694,28 +732,32 @@ async def contact_admin(call: CallbackQuery, state: FSMContext):
 async def forward_to_admin(message: Message, state: FSMContext):
     user_id = message.from_user.id
     username = message.from_user.username or message.from_user.first_name
-    
-    from database.db import get_db
-    db = await get_db()
-    cursor = await db.execute('''
-        INSERT INTO support_requests (user_id, username, message)
-        VALUES (?, ?, ?)
-    ''', (user_id, username, message.text))
-    await db.commit()
-    request_id = cursor.lastrowid
-    
-    from config import ADMIN_IDS
+
+    if not message.text or not message.text.strip():
+        await safe_send_message(
+            user_id,
+            "⚠️ Отправьте текстовое сообщение (без вложений). Для отмены — /cancel.",
+        )
+        return
+
+    text = message.text.strip()
+    request_id = await create_support_ticket(user_id, username, text)
+
     for admin_id in ADMIN_IDS:
         await safe_send_message(
             admin_id,
             f"📬 <b>НОВОЕ ОБРАЩЕНИЕ В ПОДДЕРЖКУ</b>\n\n"
-            f"👤 От: @{username} (ID: {user_id})\n"
-            f"🆔 #{request_id}\n"
-            f"📝 Текст:\n<pre>{escape(message.text or '')}</pre>",
-            parse_mode="HTML"
+            f"👤 От: @{escape(username)} (ID: {user_id})\n"
+            f"🆔 Обращение №{request_id}\n"
+            f"📝 Текст:\n<pre>{escape(text)}</pre>",
+            parse_mode="HTML",
+            reply_markup=get_admin_support_keyboard(user_id, request_id),
         )
-    
-    await safe_send_message(user_id, "✅ Ваше сообщение отправлено администратору.")
+
+    await safe_send_message(
+        user_id,
+        f"✅ Ваше обращение №{request_id} принято. Администратор ответит в ближайшее время.",
+    )
     await state.clear()
 
 

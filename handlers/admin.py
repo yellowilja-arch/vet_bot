@@ -6,6 +6,7 @@ from html import escape
 from config import ADMIN_IDS
 from services.validators import (
     get_doctor_status,
+    is_admin,
     user_in_admin_context,
     user_in_client_context,
 )
@@ -15,7 +16,13 @@ from database.doctors import add_doctor, remove_doctor, get_all_doctors, DOCTOR_
 from database.queue import get_queue_length, clear_queue
 from database.db import get_db
 from utils.helpers import safe_send_message
-from keyboards.admin import get_admin_support_keyboard
+from keyboards.admin import get_support_queue_keyboard
+from database.support import (
+    add_support_message,
+    close_support_request,
+    get_open_request,
+    list_open_requests,
+)
 from states.forms import WaitingState
 import redis
 from config import REDIS_URL
@@ -325,45 +332,139 @@ async def process_feedback(message: Message, state: FSMContext):
     await state.clear()
 
 
+@router.message(F.text == "📬 Обращения")
+async def admin_support_queue(message: Message):
+    """Список открытых обращений (доступно любому ID из ADMIN_IDS, не только в режиме /admin)."""
+    user_id = message.from_user.id
+    if not await is_admin(user_id):
+        return
+
+    items = await list_open_requests()
+    if not items:
+        await safe_send_message(user_id, "📭 Нет открытых обращений в поддержку.")
+        return
+
+    short = [(row[0], row[1], row[2]) for row in items]
+    kb = get_support_queue_keyboard(short)
+    lines = [
+        f"• №{row[0]} — {row[2] or 'без username'} (id {row[1]})"
+        for row in items[:25]
+    ]
+    text = (
+        f"📬 <b>Открытые обращения ({len(items)})</b>\n\n"
+        + "\n".join(lines)
+    )
+    if len(items) > 25:
+        text += f"\n… и ещё {len(items) - 25}"
+    await safe_send_message(user_id, text, parse_mode="HTML", reply_markup=kb)
+
+
 @router.callback_query(lambda c: c.data.startswith("support_reply:"))
 async def reply_to_support(call: CallbackQuery, state: FSMContext):
     admin_id = call.from_user.id
-    if not await user_in_admin_context(admin_id):
-        await call.answer("⛔ Только для админов. /admin")
+    if not await is_admin(admin_id):
+        await call.answer("⛔ Только администраторы")
         return
-    
+
     parts = call.data.split(":")
     user_id = _parse_int(parts[1])
     request_id = _parse_int(parts[2])
     if user_id is None or request_id is None:
         await call.answer("❌ Некорректные параметры")
         return
-    
+
+    if not await get_open_request(request_id):
+        await call.answer("Это обращение уже закрыто", show_alert=True)
+        return
+
     await state.update_data(reply_to_user=user_id, reply_request_id=request_id)
     await state.set_state(WaitingState.waiting_for_support_reply)
-    await safe_send_message(admin_id, f"✏️ Напишите ответ пользователю (обращение #{request_id}).")
+    await safe_send_message(
+        admin_id,
+        f"✏️ Режим ответа: обращение №{request_id}, пользователь id {user_id}.\n"
+        f"Напишите сообщение (можно несколько). Закрыть обращение — кнопка «✅ Закрыть» в уведомлении.\n"
+        f"Выйти из режима ответа без закрытия: /cancel",
+    )
     await call.answer()
 
 
-@router.message(WaitingState.waiting_for_support_reply)
+@router.message(Command("cancel"), WaitingState.waiting_for_support_reply)
+async def cancel_support_reply_mode(message: Message, state: FSMContext):
+    admin_id = message.from_user.id
+    if not await is_admin(admin_id):
+        return
+    await state.clear()
+    await safe_send_message(admin_id, "✅ Режим ответа отменён (обращение остаётся открытым).")
+
+
+@router.callback_query(lambda c: c.data.startswith("support_close:"))
+async def support_close_ticket(call: CallbackQuery, state: FSMContext):
+    admin_id = call.from_user.id
+    if not await is_admin(admin_id):
+        await call.answer("⛔")
+        return
+
+    parts = call.data.split(":")
+    user_id = _parse_int(parts[1])
+    request_id = _parse_int(parts[2])
+    if user_id is None or request_id is None:
+        await call.answer("❌ Некорректные параметры")
+        return
+
+    row = await get_open_request(request_id)
+    if not row or int(row[1]) != user_id:
+        await call.answer("Обращение уже закрыто или не найдено", show_alert=True)
+        return
+
+    ok = await close_support_request(request_id)
+    if not ok:
+        await call.answer("Не удалось закрыть", show_alert=True)
+        return
+
+    await safe_send_message(
+        user_id,
+        f"✅ Обращение №{request_id} закрыто администратором.\n"
+        f"Если снова понадобится помощь — «🆘 Помощь» → «📝 Написать администратору».",
+    )
+    await safe_send_message(admin_id, f"✅ Обращение №{request_id} закрыто.")
+
+    data = await state.get_data()
+    if data.get("reply_request_id") == request_id:
+        await state.clear()
+
+    await call.answer()
+
+
+@router.message(WaitingState.waiting_for_support_reply, F.text)
 async def send_support_reply(message: Message, state: FSMContext):
     admin_id = message.from_user.id
-    if not await user_in_admin_context(admin_id):
+    if not await is_admin(admin_id):
         return
-    
+    if message.text and message.text.strip().startswith("/"):
+        return
+
     data = await state.get_data()
     user_id = data.get("reply_to_user")
     request_id = data.get("reply_request_id")
-    
-    if user_id:
-        await safe_send_message(user_id, f"📬 <b>Ответ администрации</b>\n\n{escape(message.text or '')}", parse_mode="HTML")
-        
-        db = await get_db()
-        await db.execute('UPDATE support_requests SET status = "replied", resolved_at = CURRENT_TIMESTAMP WHERE id = ?', (request_id,))
-        await db.commit()
-        
-        await safe_send_message(admin_id, f"✅ Ответ отправлен пользователю (обращение #{request_id}).")
-    else:
-        await safe_send_message(admin_id, "❌ Не найден пользователь для ответа.")
-    
-    await state.clear()
+
+    if not user_id or not request_id:
+        await safe_send_message(admin_id, "❌ Не выбрано обращение. Откройте «📬 Обращения» или нажмите «📝 Ответить».")
+        await state.clear()
+        return
+
+    if not await get_open_request(request_id):
+        await safe_send_message(admin_id, "❌ Это обращение уже закрыто.")
+        await state.clear()
+        return
+
+    body = message.text or ""
+    await add_support_message(request_id, "admin", admin_id, body)
+    await safe_send_message(
+        user_id,
+        f"📬 <b>Ответ администрации</b> (обращение №{request_id})\n\n{escape(body)}",
+        parse_mode="HTML",
+    )
+    await safe_send_message(
+        admin_id,
+        f"✅ Сообщение доставлено (№{request_id}). Можно отправить ещё или закрыть обращение кнопкой «✅ Закрыть».",
+    )
