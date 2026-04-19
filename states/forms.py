@@ -17,6 +17,7 @@ class QuestionnaireState(StatesGroup):
     waiting_breed = State()        # Порода
     waiting_condition = State()    # Упитанность
     waiting_chronic = State()      # Хронические заболевания
+    waiting_recent_illness = State()  # Болезни за последний месяц
 
 
 class WaitingState(StatesGroup):
