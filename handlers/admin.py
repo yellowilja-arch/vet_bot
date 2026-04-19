@@ -25,6 +25,7 @@ from database.support import (
     list_open_requests,
 )
 from states.forms import WaitingState, AdminState
+import logging
 import os
 import shutil
 import tempfile
@@ -49,8 +50,22 @@ async def admin_clear_queue(message: Message):
     user_id = message.from_user.id
     if not await user_in_admin_context(user_id):
         return
-    await clear_queue("all")
-    await safe_send_message(user_id, "✅ Очередь all очищена (Redis + записи waiting/processing в БД).")
+    affected, notify_ids = await clear_queue("all")
+    for uid in notify_ids:
+        try:
+            await safe_send_message(
+                uid,
+                "ℹ️ Общая очередь была очищена администратором.\n"
+                "Предварительное закрепление за врачом снято. "
+                "Если оплата уже прошла — откройте нужную тему снова или напишите в «🆘 Помощь».",
+            )
+        except Exception as e:
+            logging.warning("clearqueue: не удалось уведомить клиента %s: %s", uid, e)
+    await safe_send_message(
+        user_id,
+        f"✅ Очередь all очищена. Записей в очереди: {len(affected)} "
+        f"(уведомлений клиентам: {len(notify_ids)}; для «оплачено» сброшено закрепление врача в БД).",
+    )
 
 
 async def _admin_send_sqlite_backup(
