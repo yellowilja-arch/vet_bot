@@ -279,7 +279,18 @@ def get_waiting_keyboard():
     )
 
 
-
+def get_client_end_consultation_inline_keyboard(client_id: int) -> InlineKeyboardMarkup:
+    """Напоминание 10 мин: клиент может завершить диалог с врачом."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Завершить консультацию",
+                    callback_data=f"cli_end_cf:{client_id}",
+                )
+            ],
+        ]
+    )
 
 
 def get_our_doctors_inline_keyboard(lines: list[tuple[int, str]]) -> InlineKeyboardMarkup:
