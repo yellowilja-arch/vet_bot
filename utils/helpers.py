@@ -1,7 +1,9 @@
 import asyncio
 import redis
 from config import REDIS_URL
-from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
+import logging
+
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram import Bot
 from config import BOT_TOKEN
 
@@ -28,8 +30,17 @@ async def safe_send_message(chat_id, text, retries=3, **kwargs):
             return None
         await asyncio.sleep(e.retry_after)
         return await safe_send_message(chat_id, text, retries=retries - 1, **kwargs)
+    except TelegramBadRequest as e:
+        err = str(e).lower()
+        if "chat not found" in err or "user is deactivated" in err:
+            logging.warning(
+                "Сообщение не доставлено в %s: пользователь не начал диалог с ботом или неверный id",
+                chat_id,
+            )
+            return None
+        logging.error("Ошибка отправки в %s: %s", chat_id, e)
+        return None
     except Exception as e:
-        import logging
         logging.error(f"Ошибка отправки в {chat_id}: {e}")
         return None
 

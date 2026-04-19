@@ -30,7 +30,7 @@ from keyboards.client import (
     get_species_keyboard, get_condition_keyboard, get_rating_keyboard,
     get_support_keyboard, get_waiting_keyboard, get_back_keyboard
 )
-from keyboards.admin import get_admin_main_keyboard, get_admin_support_keyboard
+from keyboards.admin import get_admin_main_keyboard
 from keyboards.doctor import (
     get_doctor_main_keyboard,
     get_confirm_payment_inline_keyboard,
@@ -38,6 +38,7 @@ from keyboards.doctor import (
 )
 from states.forms import PaymentState, QuestionnaireState, WaitingState
 from services.bot_commands import apply_commands_for_user
+from services.notifications import notify_support_ticket_created
 
 router = Router()
 _redis = redis.from_url(REDIS_URL, decode_responses=True)
@@ -743,16 +744,7 @@ async def forward_to_admin(message: Message, state: FSMContext):
     text = message.text.strip()
     request_id = await create_support_ticket(user_id, username, text)
 
-    for admin_id in ADMIN_IDS:
-        await safe_send_message(
-            admin_id,
-            f"📬 <b>НОВОЕ ОБРАЩЕНИЕ В ПОДДЕРЖКУ</b>\n\n"
-            f"👤 От: @{escape(username)} (ID: {user_id})\n"
-            f"🆔 Обращение №{request_id}\n"
-            f"📝 Текст:\n<pre>{escape(text)}</pre>",
-            parse_mode="HTML",
-            reply_markup=get_admin_support_keyboard(user_id, request_id),
-        )
+    await notify_support_ticket_created(user_id, username, text, request_id)
 
     await safe_send_message(
         user_id,

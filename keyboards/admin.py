@@ -15,7 +15,7 @@ def get_admin_main_keyboard():
 
 
 def get_admin_support_keyboard(user_id: int, request_id: int):
-    """Кнопки для входящего обращения в поддержку."""
+    """Кнопки для входящего обращения в поддержку (только у администраторов)."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -26,6 +26,12 @@ def get_admin_support_keyboard(user_id: int, request_id: int):
                 InlineKeyboardButton(
                     text="✅ Закрыть",
                     callback_data=f"support_close:{user_id}:{request_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📋 Шаблон: вопрос/проблема",
+                    callback_data=f"support_tpl:{user_id}:{request_id}",
                 ),
             ],
         ]

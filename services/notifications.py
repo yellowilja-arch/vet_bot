@@ -31,6 +31,55 @@ async def send_crash_report(error_text: str):
         parse_mode="HTML"
     )
 
+async def notify_support_ticket_created(
+    client_user_id: int,
+    username: str,
+    text: str,
+    request_id: int,
+) -> None:
+    """
+    Уведомляет администраторов (с кнопками) и всех активных врачей (только текст).
+    Врач видит обращение, ответ через кнопки — у администратора.
+    """
+    from html import escape
+
+    from config import ADMIN_IDS
+    from database.doctors import DOCTOR_IDS
+    from keyboards.admin import get_admin_support_keyboard
+
+    body = (
+        f"📬 <b>НОВОЕ ОБРАЩЕНИЕ В ПОДДЕРЖКУ</b>\n\n"
+        f"👤 От: @{escape(username)} (ID: {client_user_id})\n"
+        f"🆔 Обращение №{request_id}\n"
+        f"📝 Текст:\n<pre>{escape(text)}</pre>"
+    )
+    doctor_footer = (
+        "\n\n<i>Ответ клиенту оформляет администратор. У вас только уведомление.</i>"
+    )
+
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for uid in list(ADMIN_IDS) + list(DOCTOR_IDS):
+        if uid not in seen:
+            seen.add(uid)
+            ordered.append(uid)
+
+    for chat_id in ordered:
+        if chat_id in ADMIN_IDS:
+            await safe_send_message(
+                chat_id,
+                body,
+                parse_mode="HTML",
+                reply_markup=get_admin_support_keyboard(client_user_id, request_id),
+            )
+        else:
+            await safe_send_message(
+                chat_id,
+                body + doctor_footer,
+                parse_mode="HTML",
+            )
+
+
 async def notify_new_queue_client(doctor_id: int, topic: str, queue_length: int):
     """Уведомляет врача о новом клиенте в очереди"""
     from utils.helpers import safe_send_message

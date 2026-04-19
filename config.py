@@ -10,6 +10,8 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
 ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "1092230808").split(",") if x.strip()]
+# Текст кнопки «Шаблон» при ответе клиенту в поддержке
+SUPPORT_TEMPLATE_TEXT = os.getenv("SUPPORT_TEMPLATE_TEXT", "Какой у Вас вопрос/проблема?")
 PHONE_NUMBER = os.getenv("PHONE_NUMBER", "+79256530940")
 
 # Railway PORT

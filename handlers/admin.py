@@ -3,7 +3,7 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from html import escape
-from config import ADMIN_IDS
+from config import ADMIN_IDS, REDIS_URL, SUPPORT_TEMPLATE_TEXT
 from services.validators import (
     get_doctor_status,
     is_admin,
@@ -25,7 +25,6 @@ from database.support import (
 )
 from states.forms import WaitingState
 import redis
-from config import REDIS_URL
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -432,6 +431,37 @@ async def support_close_ticket(call: CallbackQuery, state: FSMContext):
     if data.get("reply_request_id") == request_id:
         await state.clear()
 
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("support_tpl:"))
+async def support_send_template(call: CallbackQuery, state: FSMContext):
+    """Отправить клиенту шаблонный текст из настроек (config SUPPORT_TEMPLATE_TEXT)."""
+    admin_id = call.from_user.id
+    if not await is_admin(admin_id):
+        await call.answer("⛔")
+        return
+
+    parts = call.data.split(":")
+    user_id = _parse_int(parts[1])
+    request_id = _parse_int(parts[2])
+    if user_id is None or request_id is None:
+        await call.answer("❌ Некорректные параметры")
+        return
+
+    row = await get_open_request(request_id)
+    if not row or int(row[1]) != user_id:
+        await call.answer("Обращение уже закрыто или не найдено", show_alert=True)
+        return
+
+    template = SUPPORT_TEMPLATE_TEXT.strip()
+    await add_support_message(request_id, "admin", admin_id, template)
+    await safe_send_message(
+        user_id,
+        f"📬 <b>Сообщение администрации</b> (обращение №{request_id})\n\n{escape(template)}",
+        parse_mode="HTML",
+    )
+    await safe_send_message(admin_id, f"✅ Шаблон отправлен клиенту (№{request_id}).")
     await call.answer()
 
 
