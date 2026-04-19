@@ -1,6 +1,7 @@
 import redis
 from config import REDIS_URL, DOCTORS
 from database.db import get_db
+from database.doctors import REAL_TELEGRAM_USER_ID_MIN
 from services.validators import get_doctor_status, get_current_client
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
@@ -16,9 +17,9 @@ async def pick_doctor_for_topic(topic_key: str) -> int | None:
     cur = await db.execute(
         """
         SELECT telegram_id FROM doctors
-        WHERE is_active = 1 AND specialization = ?
+        WHERE is_active = 1 AND specialization = ? AND telegram_id >= ?
         """,
-        (topic_key,),
+        (topic_key, REAL_TELEGRAM_USER_ID_MIN),
     )
     tids = [row[0] for row in await cur.fetchall()]
     if not tids:

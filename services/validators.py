@@ -50,6 +50,18 @@ def get_current_client(doctor_id):
     return r.get(f"doctor:{doctor_id}:current_client")
 
 
+def get_doctor_status_symbol(doctor_id: int) -> str:
+    """
+    Статус для отображения клиенту:
+    🟢 — онлайн и свободен, 🔴 — онлайн, ведёт консультацию, ⚪ — офлайн.
+    """
+    if get_doctor_status(doctor_id) == "online":
+        if get_current_client(doctor_id):
+            return "🔴"
+        return "🟢"
+    return "⚪"
+
+
 def set_doctor_status(doctor_id, status):
     """Устанавливает статус врача"""
     r.set(f"doctor:{doctor_id}:status", status)
