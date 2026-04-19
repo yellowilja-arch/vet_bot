@@ -85,6 +85,37 @@ async def notify_support_ticket_created(
             )
 
 
+async def notify_admins_client_support_reply(
+    client_user_id: int,
+    telegram_username: str | None,
+    first_name: str | None,
+    request_id: int,
+    text: str,
+) -> None:
+    """Ответ клиента в открытом обращении — только администраторам, с кнопками."""
+    from html import escape
+
+    from keyboards.admin import get_admin_support_keyboard
+
+    if telegram_username:
+        who = f"@{escape(telegram_username)}"
+    else:
+        who = escape((first_name or "").strip() or "без имени")
+    body = (
+        f"📬 <b>Ответ от клиента №{request_id}</b>\n\n"
+        f"👤 {who} (ID: {client_user_id})\n"
+        f"📝 Текст:\n<pre>{escape(text)}</pre>"
+        f"\n\n🔔 <i>Новое сообщение в обращении</i>"
+    )
+    for admin_id in ADMIN_IDS:
+        await safe_send_message(
+            admin_id,
+            body,
+            parse_mode="HTML",
+            reply_markup=get_admin_support_keyboard(client_user_id, request_id),
+        )
+
+
 async def notify_new_queue_client(doctor_id: int, topic: str, queue_length: int):
     """Уведомляет врача о новом клиенте в очереди"""
     from utils.helpers import safe_send_message
