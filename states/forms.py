@@ -10,6 +10,7 @@ class PaymentState(StatesGroup):
 
 class QuestionnaireState(StatesGroup):
     """Состояния для опросника после оплаты"""
+    waiting_pet_name = State()   # Имя питомца
     waiting_species = State()      # Вид животного
     waiting_age = State()          # Возраст
     waiting_weight = State()       # Вес

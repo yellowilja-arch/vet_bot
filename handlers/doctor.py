@@ -8,6 +8,7 @@ from aiogram import Router, F
 from aiogram.filters import Command, BaseFilter
 from aiogram.enums import MessageEntityType
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from config import SPECIALISTS
@@ -81,20 +82,24 @@ async def _run_confirm_payment_flow(doctor_id: int, client_id: int, state: FSMCo
         await safe_send_message(doctor_id, "❌ Ошибка подтверждения")
         await safe_send_message(client_id, "❌ Ошибка подтверждения оплаты")
         return False
-    await safe_send_message(client_id, "✅ Оплата подтверждена!")
-    await safe_send_message(doctor_id, "✅ Оплата подтверждена")
+    await safe_send_message(
+        doctor_id,
+        f"✅ Оплата клиента #{client_id} подтверждена!\n\n"
+        "Клиент заполняет анкету о питомце. После заполнения вы получите уведомление "
+        "с кнопкой «▶️ Начать консультацию».",
+    )
     client_state = FSMContext(
         storage=state.storage,
         key=StorageKey(bot_id=bot_id, chat_id=client_id, user_id=client_id),
     )
     await client_state.update_data(consultation_id=consultation_id, problem_name="Консультация")
-    from keyboards.client import get_species_keyboard
-    await client_state.set_state(QuestionnaireState.waiting_species)
+    await client_state.set_state(QuestionnaireState.waiting_pet_name)
     await safe_send_message(
         client_id,
-        "📋 <b>Пожалуйста, заполните информацию о питомце</b>\n\n"
-        "Выберите вид животного:",
-        reply_markup=get_species_keyboard(),
+        "✅ <b>Оплата подтверждена!</b>\n\n"
+        "Пожалуйста, заполните информацию о питомце.\n\n"
+        "🐾 Как зовут вашего питомца?\n\n"
+        "<i>(Напишите имя: Барсик, Шарик, Рекс...)</i>",
         parse_mode="HTML",
     )
     return True
@@ -134,7 +139,7 @@ async def execute_take_client(
     )
     await safe_send_message(
         doctor_id,
-        "✅ Клиент принят. Напишите сообщение.",
+        "✅ Консультация начата! Напишите сообщение клиенту.",
         reply_markup=get_doctor_actions_keyboard(int(client_id)),
     )
     update_doctor_activity(doctor_id)
@@ -318,9 +323,22 @@ async def take_consultation_callback(call: CallbackQuery):
     await call.answer("Консультация началась" if ok else "Не удалось начать", show_alert=not ok)
     if ok:
         try:
-            await call.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
+            base = call.message.html_text or call.message.text or ""
+            await call.message.edit_text(
+                f"{base}\n\n🟢 Консультация активна",
+                parse_mode="HTML",
+            )
+        except (TelegramBadRequest, Exception):
+            try:
+                await call.message.edit_text(
+                    f"{call.message.text or ''}\n\n🟢 Консультация активна",
+                )
+            except Exception:
+                try:
+                    await call.message.edit_reply_markup(reply_markup=None)
+                except Exception:
+                    pass
+                await safe_send_message(doctor_id, "🟢 Консультация активна")
 
 
 def _button_caption(name: str, spec_key: str) -> str:

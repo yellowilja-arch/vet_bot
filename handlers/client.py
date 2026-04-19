@@ -683,6 +683,27 @@ async def cancel_payment(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
+@router.message(QuestionnaireState.waiting_pet_name)
+async def process_pet_name(message: Message, state: FSMContext):
+    name = (message.text or "").strip()
+    if not name:
+        await safe_send_message(message.from_user.id, "Напишите имя питомца текстом.")
+        return
+    if name == "❌ Отмена":
+        await state.clear()
+        await safe_send_message(message.from_user.id, "❌ Опросник отменён.", reply_markup=ReplyKeyboardRemove())
+        return
+    await state.update_data(pet_name=name)
+    await state.set_state(QuestionnaireState.waiting_species)
+    await safe_send_message(
+        message.from_user.id,
+        f"✅ Имя сохранено: <b>{escape(name)}</b>\n\n"
+        "Выберите вид животного:",
+        reply_markup=get_species_keyboard(),
+        parse_mode="HTML",
+    )
+
+
 @router.message(QuestionnaireState.waiting_species)
 async def process_species(message: Message, state: FSMContext):
     species = message.text
@@ -781,7 +802,8 @@ async def process_chronic(message: Message, state: FSMContext):
 
 async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     data = await state.get_data()
-    
+
+    pet_name = data.get("pet_name", "Не указано")
     species = data.get("species", "Не указан")
     age = data.get("age", "Не указан")
     weight = data.get("weight", "Не указан")
@@ -799,6 +821,7 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     db = await get_db()
     await db.execute('''
         UPDATE consultations SET
+            pet_name = ?,
             pet_species = ?,
             pet_age = ?,
             pet_weight = ?,
@@ -806,22 +829,25 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
             pet_condition = ?,
             pet_chronic = ?
         WHERE id = ?
-    ''', (species, age, weight, breed, condition, chronic, consultation_id))
+    ''', (pet_name, species, age, weight, breed, condition, chronic, consultation_id))
     await db.commit()
 
     uid = _client_telegram_id(message)
     
+    prob_title = escape(str(data.get("problem_name", "Не указана")))
+    anon = escape(str(data.get("anonymous_id", "Не указан")))
     vet_message = (
         f"🆕 <b>НОВАЯ КОНСУЛЬТАЦИЯ</b>\n\n"
-        f"📂 Проблема: {data.get('problem_name', 'Не указана')}\n"
-        f"👤 Клиент ID: {data.get('anonymous_id', 'Не указан')}\n\n"
-        f"📋 <b>ИНФОРМАЦИЯ О ПИТОМЦЕ</b>\n"
-        f"🐾 Вид: {species}\n"
-        f"📅 Возраст: {age}\n"
-        f"⚖️ Вес: {weight}\n"
-        f"🐕 Порода: {breed}\n"
-        f"📊 Упитанность: {condition}\n"
-        f"💊 Хронические заболевания: {chronic}\n"
+        f"📂 Проблема: {prob_title}\n"
+        f"👤 Клиент ID: {anon}\n\n"
+        f"📋 <b>ИНФОРМАЦИЯ О ПИТОМЦЕ:</b>\n\n"
+        f"🐾 Имя: {escape(str(pet_name))}\n"
+        f"🐾 Вид: {escape(str(species))}\n"
+        f"📅 Возраст: {escape(str(age))}\n"
+        f"⚖️ Вес: {escape(str(weight))}\n"
+        f"🐕 Порода: {escape(str(breed))}\n"
+        f"📊 Упитанность: {escape(str(condition))}\n"
+        f"💊 Хронические заболевания: {escape(str(chronic))}\n"
     )
 
     cursor = await db.execute(

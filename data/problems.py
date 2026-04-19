@@ -2,6 +2,7 @@
 
 # 12 специализаций: id → отображаемое название (эмодзи + роль)
 SPECIALISTS = {
+    "gp": "🩺 Врач общей практики",
     "therapist": "👨‍⚕️ Терапевт",
     "oncologist": "🎗️ Онколог",
     "cardiologist": "❤️ Кардиолог",
@@ -18,6 +19,7 @@ SPECIALISTS = {
 
 # Порядок кнопок выбора специализации (админ / отображение списков)
 SPECIALIZATION_KEYS = [
+    "gp",
     "therapist",
     "oncologist",
     "cardiologist",

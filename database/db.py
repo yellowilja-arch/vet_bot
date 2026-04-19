@@ -84,6 +84,12 @@ async def init_db():
         print("✅ Колонка pet_species добавлена")
     except:
         pass
+
+    try:
+        await db.execute('ALTER TABLE consultations ADD COLUMN pet_name TEXT')
+        print("✅ Колонка pet_name добавлена")
+    except:
+        pass
     
     try:
         await db.execute('ALTER TABLE consultations ADD COLUMN pet_age TEXT')
