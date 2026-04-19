@@ -50,6 +50,7 @@ from database.support import (
     ensure_active_support_ticket_for_client,
     format_user_history,
 )
+from services.dialog_session import record_client_message
 from utils.helpers import safe_send_message, safe_send_photo, get_anonymous_id, split_text_chunks
 from keyboards.client import (
     TEXT_BTN_OUR_DOCTORS,
@@ -1187,6 +1188,28 @@ async def my_cons_callback(call: CallbackQuery):
     await call.answer()
 
 
+@router.callback_query(lambda c: c.data and c.data.startswith("cli_end_cf:"))
+async def client_end_consultation_from_reminder(call: CallbackQuery):
+    """Inline «Завершить консультацию» из напоминания неактивности (ждём клиента)."""
+    try:
+        client_id = int(call.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+    if call.from_user.id != client_id:
+        await call.answer("⛔ Недоступно.", show_alert=True)
+        return
+    raw = _redis.get(f"client:{client_id}:doctor")
+    if not raw:
+        await call.answer("Консультация уже завершена.", show_alert=True)
+        return
+    doctor_id = int(raw)
+    from handlers.doctor import finalize_consultation_from_client
+
+    await finalize_consultation_from_client(client_id, doctor_id)
+    await call.answer()
+
+
 @router.message(ClientSupportFollowupFilter())
 async def client_support_followup(message: Message):
     """Ответ клиента в уже открытом обращении (после шаблона/сообщений админа)."""
@@ -1230,3 +1253,4 @@ async def relay_client_to_doctor(message: Message):
             caption=f"👤 Клиент: {cap}",
         )
     update_client_activity(uid)
+    record_client_message(uid, doctor_id)

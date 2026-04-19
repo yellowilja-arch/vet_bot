@@ -87,6 +87,32 @@ async def _end_active_consultation(doctor_id: int, client_id: int) -> None:
     await safe_send_message(doctor_id, "✅ Консультация завершена")
 
 
+async def finalize_consultation_from_client(client_id: int, doctor_id: int) -> None:
+    """Завершение консультации по inline-кнопке клиента (напоминание 10 мин)."""
+    from database.db import get_db
+    from keyboards.client import get_rating_keyboard
+
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT id FROM consultations WHERE client_id = ? AND status = 'active'",
+        (client_id,),
+    )
+    row = await cursor.fetchone()
+    if row:
+        consultation_id = row[0]
+        await save_consultation_end(consultation_id, "ended_by_client")
+        clear_consultation_chat(consultation_id)
+        await safe_send_message(
+            int(client_id),
+            "Пожалуйста, оцените консультацию:",
+            reply_markup=get_rating_keyboard(consultation_id, doctor_id),
+        )
+    set_current_client(doctor_id, None)
+    clear_session(int(client_id), doctor_id)
+    await safe_send_message(int(client_id), "🔚 Вы завершили консультацию.")
+    await safe_send_message(doctor_id, "✅ Клиент завершил консультацию.")
+
+
 async def _run_confirm_payment_flow(doctor_id: int, client_id: int, state: FSMContext, bot_id: int) -> bool:
     """Подтверждение оплаты и запуск анкеты у клиента."""
     payment = await get_pending_payment(client_id)
@@ -170,6 +196,9 @@ async def execute_take_client(
         reply_markup=get_doctor_actions_keyboard(int(client_id)),
     )
     update_doctor_activity(doctor_id)
+    from services.dialog_session import init_dialog_after_consultation_start
+
+    init_dialog_after_consultation_start(int(client_id), int(doctor_id))
     return True
 
 
@@ -580,6 +609,11 @@ async def redirect_execute(call: CallbackQuery):
     r.set(f"client:{client_id}:doctor", str(target_tid))
     set_client_consultation(client_id, consultation_id)
 
+    from services.dialog_session import clear_dialog_session, init_dialog_after_consultation_start
+
+    clear_dialog_session(client_id)
+    init_dialog_after_consultation_start(client_id, target_tid)
+
     db = await get_db()
     cur_sql = await db.execute(
         """
@@ -751,3 +785,6 @@ async def chat_messages(message: Message):
             caption=f"👨‍⚕️ Врач: {cap}" if cap else "👨‍⚕️ Врач: 📷",
         )
     update_doctor_activity(user_id)
+    from services.dialog_session import record_doctor_message
+
+    record_doctor_message(int(current_client), user_id)
