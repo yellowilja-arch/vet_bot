@@ -166,6 +166,6 @@ async def clear_queue(topic: str):
     async with _db_lock:
         await db.execute('''
             UPDATE queue SET status = "cancelled"
-            WHERE topic = ? AND status = "waiting"
+            WHERE topic = ? AND status IN ("waiting", "processing")
         ''', (topic,))
         await db.commit()
