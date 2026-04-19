@@ -87,9 +87,12 @@ def update_client_activity(client_id):
 
 def clear_session(client_id, doctor_id):
     """Очищает сессию клиента и врача в Redis"""
+    from services.dialog_session import clear_dialog_session
+
     r.delete(f"client:{client_id}:doctor")
     r.delete(f"client:{client_id}:consultation")
     r.delete(f"doctor:{doctor_id}:current_client")
+    clear_dialog_session(int(client_id))
 
 
 def get_panel_mode(user_id: int) -> str | None:
