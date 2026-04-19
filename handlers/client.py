@@ -36,6 +36,7 @@ from utils.helpers import safe_send_message, safe_send_photo, get_anonymous_id, 
 from keyboards.client import (
     get_main_keyboard, get_category_problems_keyboard, get_problem_info_keyboard,
     get_species_keyboard, get_condition_keyboard, get_rating_keyboard,
+    get_recent_illness_keyboard,
     get_support_keyboard, get_waiting_keyboard, get_back_keyboard,
     get_our_doctors_inline_keyboard,
     get_doctor_free_pay_keyboard,
@@ -802,13 +803,53 @@ async def no_chronic(call: CallbackQuery, state: FSMContext):
         await call.message.delete()
     except Exception:
         pass
-    await send_pet_info_to_doctor(call.message, state)
+    await state.set_state(QuestionnaireState.waiting_recent_illness)
+    await safe_send_message(
+        call.message.chat.id,
+        "🩺 <b>Болел ли питомец чем-то за последний месяц?</b>\n\n"
+        "Опишите симптомы, диагноз или лечение, если были.\n"
+        "Если не болел, напишите <b>нет</b> или нажмите кнопку ниже.",
+        reply_markup=get_recent_illness_keyboard(),
+        parse_mode="HTML",
+    )
 
 
 @router.message(QuestionnaireState.waiting_chronic)
 async def process_chronic(message: Message, state: FSMContext):
     chronic = message.text
     await state.update_data(chronic=chronic)
+    await state.set_state(QuestionnaireState.waiting_recent_illness)
+    await safe_send_message(
+        message.from_user.id,
+        "🩺 <b>Болел ли питомец чем-то за последний месяц?</b>\n\n"
+        "Опишите симптомы, диагноз или лечение, если были.\n"
+        "Если не болел, напишите <b>нет</b> или нажмите кнопку ниже.",
+        reply_markup=get_recent_illness_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(lambda c: c.data == "no_recent_illness")
+async def no_recent_illness(call: CallbackQuery, state: FSMContext):
+    await state.update_data(recent_illness="Нет")
+    await call.answer()
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await send_pet_info_to_doctor(call.message, state)
+
+
+@router.message(QuestionnaireState.waiting_recent_illness)
+async def process_recent_illness(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if not text:
+        await safe_send_message(
+            message.from_user.id,
+            "Напишите ответ или нажмите «✅ Нет, не болел».",
+        )
+        return
+    await state.update_data(recent_illness=text)
     await send_pet_info_to_doctor(message, state)
 
 
@@ -838,6 +879,7 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     breed = data.get("breed", "Не указана")
     condition = data.get("condition", "Не указана")
     chronic = data.get("chronic", "Не указано")
+    recent_illness = data.get("recent_illness", "Не указано")
     consultation_id = data.get("consultation_id")
     anonymous_id = data.get("anonymous_id", "anon")
     if not consultation_id:
@@ -855,9 +897,10 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
             pet_weight = ?,
             pet_breed = ?,
             pet_condition = ?,
-            pet_chronic = ?
+            pet_chronic = ?,
+            recent_illness = ?
         WHERE id = ?
-    ''', (pet_name, species, age, weight, breed, condition, chronic, consultation_id))
+    ''', (pet_name, species, age, weight, breed, condition, chronic, recent_illness, consultation_id))
     await db.commit()
 
     uid = _client_telegram_id(message)
@@ -876,6 +919,7 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
         f"🐕 Порода: {escape(str(breed))}\n"
         f"📊 Упитанность: {escape(str(condition))}\n"
         f"💊 Хронические заболевания: {escape(str(chronic))}\n"
+        f"🩺 Болезни за последний месяц: {escape(str(recent_illness))}\n"
     )
 
     cursor = await db.execute(
