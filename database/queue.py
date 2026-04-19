@@ -175,8 +175,13 @@ async def restore_queue_from_db():
 async def clear_queue(topic: str) -> tuple[list[int], list[int]]:
     """
     Очищает очередь (Redis + SQLite).
-    Возвращает (все client_id из сброшенной очереди, кому слать уведомление в Telegram).
-    Уведомление пропускаем, если у клиента уже есть консультация в статусе active (редкий битый кейс).
+    Возвращает (все client_id, затронутые сбросом; кому слать уведомление в Telegram).
+
+    Важно: при оплате по теме врач часто прописывается в consultations сразу, а в таблицу queue
+    клиент не попадает (очередь только для общего пула без предназначения). Тогда старый clear_queue
+    не находил client_id и «хирург» оставался в «Мои консультации». Для topic == \"all\" дополнительно
+    снимаем предназначение врача у всех консультаций paid / waiting_payment с doctor_id, пока у клиента
+    нет активного диалога (status active).
     """
     from services.dialog_session import clear_dialog_session
 
@@ -189,7 +194,24 @@ async def clear_queue(topic: str) -> tuple[list[int], list[int]]:
             """,
             (topic,),
         )
-        user_ids = [int(row[0]) for row in await cursor.fetchall()]
+        queue_user_ids = [int(row[0]) for row in await cursor.fetchall()]
+
+        stale_preassign_ids: list[int] = []
+        if topic == "all":
+            cur_stale = await db.execute(
+                """
+                SELECT DISTINCT c.client_id FROM consultations c
+                WHERE c.doctor_id IS NOT NULL
+                  AND c.status IN ('paid', 'waiting_payment')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM consultations x
+                      WHERE x.client_id = c.client_id AND x.status = 'active'
+                  )
+                """
+            )
+            stale_preassign_ids = [int(row[0]) for row in await cur_stale.fetchall()]
+
+    reset_ids = sorted(set(queue_user_ids) | set(stale_preassign_ids))
 
     queue_key = f"queue:{topic}"
     set_key = f"queue_set:{topic}"
@@ -204,29 +226,31 @@ async def clear_queue(topic: str) -> tuple[list[int], list[int]]:
             """,
             (topic,),
         )
-        if user_ids:
-            placeholders = ",".join("?" * len(user_ids))
+        if reset_ids:
+            ph = ",".join("?" * len(reset_ids))
             await db.execute(
                 f"""
                 UPDATE consultations
                 SET doctor_id = NULL, doctor_name = NULL, doctor_specialization = NULL
-                WHERE status = "paid" AND client_id IN ({placeholders})
+                WHERE doctor_id IS NOT NULL
+                  AND status IN ('paid', 'waiting_payment')
+                  AND client_id IN ({ph})
                 """,
-                user_ids,
+                reset_ids,
             )
         await db.commit()
 
     active_ids: set[int] = set()
-    if user_ids:
+    if reset_ids:
         async with _db_lock:
-            ph = ",".join("?" * len(user_ids))
+            ph = ",".join("?" * len(reset_ids))
             cur = await db.execute(
                 f"SELECT client_id FROM consultations WHERE status = 'active' AND client_id IN ({ph})",
-                user_ids,
+                reset_ids,
             )
             active_ids = {int(r[0]) for r in await cur.fetchall()}
 
-    for uid in user_ids:
+    for uid in reset_ids:
         r.delete(f"user:{uid}:queue_position")
         if uid in active_ids:
             continue
@@ -234,5 +258,5 @@ async def clear_queue(topic: str) -> tuple[list[int], list[int]]:
         r.delete(f"client:{uid}:consultation")
         clear_dialog_session(uid)
 
-    notify_ids = [u for u in user_ids if u not in active_ids]
-    return user_ids, notify_ids
+    notify_ids = [u for u in reset_ids if u not in active_ids]
+    return reset_ids, notify_ids
