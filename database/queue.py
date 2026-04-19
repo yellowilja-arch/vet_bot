@@ -172,16 +172,41 @@ async def restore_queue_from_db():
         print(f"🔄 Восстановлена очередь {topic}: {len(rows)} клиентов")
 
 
-async def clear_queue(topic: str) -> tuple[list[int], list[int]]:
+async def _admin_force_close_active_consultations() -> list[int]:
+    """
+    Завершает все консультации со статусом active (БД + Redis).
+    Иначе после /clearqueue у врача остаётся doctor:{id}:current_client — в списке врачей он 🔴 «в консультации».
+    """
+    from database.consultations import get_active_consultations, save_consultation_end
+    from services.dialog_session import clear_dialog_session
+    from services.validators import clear_consultation_chat, clear_session
+
+    rows = await get_active_consultations()
+    out: list[int] = []
+    for row in rows:
+        cons_id = int(row[0])
+        client_id = int(row[1])
+        doctor_id = row[2]
+        await save_consultation_end(cons_id, "cancelled")
+        clear_consultation_chat(cons_id)
+        if doctor_id is not None:
+            clear_session(client_id, int(doctor_id))
+        else:
+            r.delete(f"client:{client_id}:doctor")
+            r.delete(f"client:{client_id}:consultation")
+            clear_dialog_session(client_id)
+        out.append(client_id)
+    return out
+
+
+async def clear_queue(topic: str) -> tuple[list[int], list[int], int]:
     """
     Очищает очередь (Redis + SQLite).
-    Возвращает (все client_id, затронутые сбросом; кому слать уведомление в Telegram).
+    Возвращает (client_id для статистики сброса; кому слать уведомление; число принудительно закрытых active).
 
-    Важно: при оплате по теме врач часто прописывается в consultations сразу, а в таблицу queue
-    клиент не попадает (очередь только для общего пула без предназначения). Тогда старый clear_queue
-    не находил client_id и «хирург» оставался в «Мои консультации». Для topic == \"all\" дополнительно
-    снимаем предназначение врача у всех консультаций paid / waiting_payment с doctor_id, пока у клиента
-    нет активного диалога (status active).
+    Для topic == \"all\":
+    - Сначала закрываются все active-консультации (иначе врач «занят» в Redis).
+    - Снимается предназначение врача у paid / waiting_payment без active (тема без записи в queue).
     """
     from services.dialog_session import clear_dialog_session
 
@@ -196,8 +221,13 @@ async def clear_queue(topic: str) -> tuple[list[int], list[int]]:
         )
         queue_user_ids = [int(row[0]) for row in await cursor.fetchall()]
 
-        stale_preassign_ids: list[int] = []
-        if topic == "all":
+    active_closed: list[int] = []
+    if topic == "all":
+        active_closed = await _admin_force_close_active_consultations()
+
+    stale_preassign_ids: list[int] = []
+    if topic == "all":
+        async with _db_lock:
             cur_stale = await db.execute(
                 """
                 SELECT DISTINCT c.client_id FROM consultations c
@@ -258,5 +288,5 @@ async def clear_queue(topic: str) -> tuple[list[int], list[int]]:
         r.delete(f"client:{uid}:consultation")
         clear_dialog_session(uid)
 
-    notify_ids = [u for u in reset_ids if u not in active_ids]
-    return reset_ids, notify_ids
+    notify_ids = sorted(set(u for u in reset_ids if u not in active_ids) | set(active_closed))
+    return reset_ids, notify_ids, len(active_closed)
