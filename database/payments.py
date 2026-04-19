@@ -13,30 +13,51 @@ async def save_payment(client_id: int, consultation_id: int, receipt_file_id: st
 
 
 async def confirm_payment(client_id: int, consultation_id: int):
-    """Подтверждает платёж"""
+    """Подтверждает текущий ожидающий платёж (в т.ч. при повторных консультациях клиента)."""
     db = await get_db()
     async with _db_lock:
-        # Проверяем, не подтверждён ли уже
-        cursor = await db.execute('''
-            SELECT status FROM payments WHERE client_id = ? AND status = "confirmed"
-        ''', (client_id,))
-        if await cursor.fetchone():
-            return False
-        
-        await db.execute('''
-            UPDATE payments 
-            SET status = "confirmed", confirmed_at = CURRENT_TIMESTAMP
-            WHERE client_id = ? AND status = "pending"
-        ''', (client_id,))
-        await db.commit()
-        
         if consultation_id:
-            await db.execute('''
+            cursor = await db.execute(
+                """
+                SELECT id FROM payments
+                WHERE client_id = ? AND consultation_id = ? AND status = 'pending'
+                """,
+                (client_id, consultation_id),
+            )
+        else:
+            cursor = await db.execute(
+                """
+                SELECT id FROM payments
+                WHERE client_id = ? AND status = 'pending'
+                ORDER BY id DESC LIMIT 1
+                """,
+                (client_id,),
+            )
+        row = await cursor.fetchone()
+        if not row:
+            return False
+        pay_id = row[0]
+
+        await db.execute(
+            """
+            UPDATE payments
+            SET status = 'confirmed', confirmed_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (pay_id,),
+        )
+        await db.commit()
+
+        if consultation_id:
+            await db.execute(
+                """
                 UPDATE consultations SET status = 'paid', payment_confirmed = 1
-                WHERE id = ?
-            ''', (consultation_id,))
+                WHERE id = ? AND client_id = ?
+                """,
+                (consultation_id, client_id),
+            )
             await db.commit()
-        
+
         return True
 
 
