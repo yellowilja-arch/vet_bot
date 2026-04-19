@@ -1,6 +1,6 @@
 from database.db import get_db, _db_lock
 from services.validators import has_active_consultation
-from database.doctors import get_doctor_name
+from database.doctors import get_doctor_name, get_doctor_specialization
 
 
 async def save_consultation_start(client_id: int, anonymous_id: str, doctor_id: int, problem_key: str):
@@ -112,6 +112,72 @@ async def get_consultation_by_id(consultation_id: int):
     ''', (consultation_id,))
     return await cursor.fetchone()
 
+
+async def get_consultation_doctor_and_topic(consultation_id: int):
+    """doctor_id, problem_key для логики назначения."""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT doctor_id, problem_key FROM consultations WHERE id = ?",
+        (consultation_id,),
+    )
+    return await cursor.fetchone()
+
+
+async def assign_pending_doctor_from_topic(consultation_id: int, topic_key: str) -> int | None:
+    """Первичное закрепление врача по теме (после чека). Возвращает telegram_id врача или None."""
+    from services.routing import pick_doctor_for_topic
+
+    tid = await pick_doctor_for_topic(topic_key)
+    if not tid:
+        return None
+    name = await get_doctor_name(tid)
+    spec = await get_doctor_specialization(tid) or topic_key
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            """
+            UPDATE consultations
+            SET doctor_id = ?, doctor_name = ?, doctor_specialization = ?
+            WHERE id = ?
+            """,
+            (tid, name, spec, consultation_id),
+        )
+        await db.commit()
+    return tid
+
+
+async def assign_pending_doctor_direct(consultation_id: int, doctor_telegram_id: int) -> None:
+    """Закрепление за выбранным врачом (запись «Наши врачи»)."""
+    name = await get_doctor_name(doctor_telegram_id)
+    spec = await get_doctor_specialization(doctor_telegram_id) or "—"
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            """
+            UPDATE consultations
+            SET doctor_id = ?, doctor_name = ?, doctor_specialization = ?
+            WHERE id = ?
+            """,
+            (doctor_telegram_id, name, spec, consultation_id),
+        )
+        await db.commit()
+
+
+async def ensure_doctor_assigned_for_consultation(consultation_id: int) -> int | None:
+    """
+    Если врач ещё не закреплён (напр. все были офлайн при чеке) — пробуем снова.
+    Возвращает telegram_id врача из строки консультации или None.
+    """
+    row = await get_consultation_doctor_and_topic(consultation_id)
+    if not row:
+        return None
+    doctor_id, problem_key = row[0], row[1]
+    if doctor_id is not None:
+        return int(doctor_id)
+    if not problem_key or problem_key == "direct_booking":
+        return None
+    tid = await assign_pending_doctor_from_topic(consultation_id, problem_key)
+    return tid
 
 async def get_consultations_by_doctor(doctor_id: int, limit: int = 20):
     """Возвращает консультации врача"""

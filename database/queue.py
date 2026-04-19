@@ -62,6 +62,24 @@ async def pop_from_queue(topic: str):
     return user_id, anonymous_id, queue_id
 
 
+async def return_queue_item_to_tail(topic: str, user_id: int, anonymous_id: str, queue_id: int):
+    """
+    Вернуть элемент в конец очереди (если «Следующий» взял не того врача —
+    клиент закреплён за другим по записи consultations.doctor_id).
+    """
+    queue_key = f"queue:{topic}"
+    set_key = f"queue_set:{topic}"
+    r.rpush(queue_key, f"{user_id}:{anonymous_id}:{queue_id}")
+    r.sadd(set_key, user_id)
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            'UPDATE queue SET status = "waiting" WHERE id = ?',
+            (queue_id,),
+        )
+        await db.commit()
+
+
 async def confirm_queue_processed(queue_id: int):
     """Подтверждает успешную обработку клиента из очереди"""
     db = await get_db()

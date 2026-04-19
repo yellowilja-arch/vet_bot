@@ -66,6 +66,37 @@ async def get_all_doctors():
     ''')
     return await cursor.fetchall()
 
+
+async def list_distinct_specializations_active() -> list[str]:
+    """Все специализации, по которым есть активные врачи."""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT DISTINCT specialization FROM doctors WHERE is_active = 1 ORDER BY specialization",
+    )
+    return [row[0] for row in await cursor.fetchall()]
+
+
+async def topic_keys_available_for_client_menu() -> list[str]:
+    """
+    Темы для клиента: специализация видна только если есть ≥1 активный врач
+    по этой специализации в статусе online.
+    """
+    from services.validators import get_doctor_status
+
+    specs = await list_distinct_specializations_active()
+    keys: list[str] = []
+    db = await get_db()
+    for spec in specs:
+        cur = await db.execute(
+            "SELECT telegram_id FROM doctors WHERE is_active = 1 AND specialization = ?",
+            (spec,),
+        )
+        for (tid,) in await cur.fetchall():
+            if get_doctor_status(tid) == "online":
+                keys.append(spec)
+                break
+    return sorted(set(keys))
+
 async def add_doctor(telegram_id: int, name: str, specialization: str):
     """Добавляет нового врача"""
     db = await get_db()
