@@ -331,6 +331,15 @@ async def process_feedback(message: Message, state: FSMContext):
     await state.clear()
 
 
+def _support_time_label(created_at: str | None) -> str:
+    if not created_at:
+        return "??:??"
+    parts = str(created_at).strip().split()
+    if len(parts) >= 2:
+        return ":".join(parts[1].split(":")[:2])
+    return (created_at or "")[:5]
+
+
 @router.message(F.text == "📬 Обращения")
 async def admin_support_queue(message: Message):
     """Список открытых обращений (доступно любому ID из ADMIN_IDS, не только в режиме /admin)."""
@@ -343,18 +352,23 @@ async def admin_support_queue(message: Message):
         await safe_send_message(user_id, "📭 Нет открытых обращений в поддержку.")
         return
 
-    short = [(row[0], row[1], row[2]) for row in items]
+    shown = items[:25]
+    short = [(row[0], row[1], row[2]) for row in shown]
     kb = get_support_queue_keyboard(short)
-    lines = [
-        f"• №{row[0]} — {row[2] or 'без username'} (id {row[1]})"
-        for row in items[:25]
-    ]
+    lines: list[str] = []
+    for i, row in enumerate(shown, start=1):
+        rid, uid, uname, _msg, created_at = row
+        label_user = f"@{uname}" if uname else f"id {uid}"
+        tm = _support_time_label(created_at)
+        lines.append(f"{i}. №{rid} - {label_user} ({tm})")
+
     text = (
-        f"📬 <b>Открытые обращения ({len(items)})</b>\n\n"
+        f"📋 <b>Активные обращения ({len(items)}):</b>\n\n"
         + "\n".join(lines)
+        + "\n\nВыберите обращение:"
     )
     if len(items) > 25:
-        text += f"\n… и ещё {len(items) - 25}"
+        text += f"\n\n… и ещё {len(items) - 25}"
     await safe_send_message(user_id, text, parse_mode="HTML", reply_markup=kb)
 
 

@@ -675,10 +675,9 @@ async def help_button(message: Message):
     await safe_send_message(
         user_id,
         "🆘 <b>Помощь и поддержка</b>\n\n"
-        "Если у вас возникли проблемы с оплатой или консультацией,\n"
-        "напишите администратору:",
+        "Выберите действие:",
         reply_markup=get_support_keyboard(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
@@ -732,7 +731,9 @@ async def support_history_callback(call: CallbackQuery):
 @router.message(WaitingState.waiting_for_admin_message)
 async def forward_to_admin(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    username = message.from_user.username or message.from_user.first_name
+    tg_user = message.from_user.username
+    first_name = message.from_user.first_name
+    display_for_db = tg_user or first_name or ""
 
     if not message.text or not message.text.strip():
         await safe_send_message(
@@ -742,13 +743,21 @@ async def forward_to_admin(message: Message, state: FSMContext):
         return
 
     text = message.text.strip()
-    request_id = await create_support_ticket(user_id, username, text)
+    request_id = await create_support_ticket(user_id, display_for_db, text)
 
-    await notify_support_ticket_created(user_id, username, text, request_id)
+    await notify_support_ticket_created(
+        user_id,
+        tg_user,
+        first_name,
+        text,
+        request_id,
+    )
 
     await safe_send_message(
         user_id,
-        f"✅ Ваше обращение №{request_id} принято. Администратор ответит в ближайшее время.",
+        "✅ Ваше обращение №{rid} принято!\n"
+        "Администратор ответит в ближайшее время.\n\n"
+        "Ваше сообщение:\n{msg}".format(rid=request_id, msg=text),
     )
     await state.clear()
 
