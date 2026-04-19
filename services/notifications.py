@@ -33,7 +33,8 @@ async def send_crash_report(error_text: str):
 
 async def notify_support_ticket_created(
     client_user_id: int,
-    username: str,
+    telegram_username: str | None,
+    first_name: str | None,
     text: str,
     request_id: int,
 ) -> None:
@@ -47,10 +48,14 @@ async def notify_support_ticket_created(
     from database.doctors import DOCTOR_IDS
     from keyboards.admin import get_admin_support_keyboard
 
+    if telegram_username:
+        who = f"@{escape(telegram_username)}"
+    else:
+        who = escape((first_name or "").strip() or "без имени")
     body = (
         f"📬 <b>НОВОЕ ОБРАЩЕНИЕ В ПОДДЕРЖКУ</b>\n\n"
-        f"👤 От: @{escape(username)} (ID: {client_user_id})\n"
-        f"🆔 Обращение №{request_id}\n"
+        f"👤 От: {who} (ID: {client_user_id})\n"
+        f"🆔 №{request_id}\n"
         f"📝 Текст:\n<pre>{escape(text)}</pre>"
     )
     doctor_footer = (
