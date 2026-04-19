@@ -26,8 +26,19 @@ from services.validators import (
     get_client_consultation_id,
     get_consultation_chat_text,
 )
-from database.queue import pop_from_queue, get_queue_length, confirm_queue_processed, remove_from_queue
-from database.consultations import update_consultation_doctor, save_consultation_end
+from database.queue import (
+    pop_from_queue,
+    get_queue_length,
+    confirm_queue_processed,
+    remove_from_queue,
+    return_queue_item_to_tail,
+)
+from database.consultations import (
+    update_consultation_doctor,
+    save_consultation_end,
+    get_consultation_doctor_and_topic,
+    ensure_doctor_assigned_for_consultation,
+)
 from database.payments import confirm_payment, get_pending_payment
 from database.doctors import (
     get_doctor_name,
@@ -87,6 +98,7 @@ async def _run_confirm_payment_flow(doctor_id: int, client_id: int, state: FSMCo
         await safe_send_message(doctor_id, "❌ Ошибка подтверждения")
         await safe_send_message(client_id, "❌ Ошибка подтверждения оплаты")
         return False
+    await ensure_doctor_assigned_for_consultation(consultation_id)
     await safe_send_message(
         doctor_id,
         f"✅ Оплата клиента #{client_id} подтверждена!\n\n"
@@ -260,8 +272,6 @@ async def run_next_from_queue(doctor_id: int) -> None:
     from database.db import get_db
 
     db = await get_db()
-    consultation_id = None
-    client_id = anonymous_id = queue_id = None
 
     for _ in range(25):
         popped = await pop_from_queue("all")
@@ -278,23 +288,26 @@ async def run_next_from_queue(doctor_id: int) -> None:
             (client_id,),
         )
         row = await cursor.fetchone()
-        if row:
-            consultation_id, _problem_key = row
-            break
-        await confirm_queue_processed(queue_id)
-
-    if not consultation_id:
-        await safe_send_message(
-            doctor_id,
-            "❌ В очереди нет заявок с оплаченной консультацией. Попросите админа: /clearqueue",
-        )
+        if not row:
+            await confirm_queue_processed(queue_id)
+            continue
+        consultation_id, _problem_key = row
+        slot = await get_consultation_doctor_and_topic(consultation_id)
+        if slot and slot[0] is not None and int(slot[0]) != doctor_id:
+            await return_queue_item_to_tail("all", client_id, anonymous_id, queue_id)
+            continue
+        ok = await execute_take_client(doctor_id, client_id, consultation_id, queue_id)
+        if not ok:
+            await safe_send_message(
+                doctor_id,
+                "❌ Не удалось начать консультацию (статус консультации изменился).",
+            )
         return
 
-    if not await execute_take_client(doctor_id, client_id, consultation_id, queue_id):
-        await safe_send_message(
-            doctor_id,
-            "❌ Не удалось начать консультацию (статус консультации изменился).",
-        )
+    await safe_send_message(
+        doctor_id,
+        "❌ В очереди нет заявок с оплаченной консультацией для вас. Попросите админа: /clearqueue",
+    )
 
 
 @router.message(Command("next"))
@@ -333,6 +346,10 @@ async def take_consultation_callback(call: CallbackQuery):
         consultation_id = int(parts[2])
     except ValueError:
         await call.answer("Ошибка данных", show_alert=True)
+        return
+    row = await get_consultation_doctor_and_topic(consultation_id)
+    if row and row[0] is not None and int(row[0]) != doctor_id:
+        await call.answer("Этот клиент закреплён за другим врачом.", show_alert=True)
         return
     ok = await execute_take_client(doctor_id, client_id, consultation_id, None)
     await call.answer("Консультация началась" if ok else "Не удалось начать", show_alert=not ok)

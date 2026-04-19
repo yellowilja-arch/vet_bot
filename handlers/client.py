@@ -5,8 +5,8 @@ from aiogram.filters import Command, BaseFilter
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from html import escape
-from config import ADMIN_IDS, PHONE_NUMBER, DOCTORS, REDIS_URL
-from data.problems import CATEGORIES, PROBLEMS, SPECIALISTS, SPECIALIZATION_KEYS
+from config import ADMIN_IDS, PHONE_NUMBER, DEFAULT_CONSULTATION_PRICE, REDIS_URL
+from data.problems import PROBLEMS, SPECIALISTS
 from services.validators import (
     is_blocked,
     is_doctor,
@@ -20,10 +20,14 @@ from services.validators import (
     get_doctor_status,
     get_current_client,
 )
-from services.routing import get_doctor_by_specialization
 from database.queue import add_to_queue
-from database.doctors import get_all_doctors, get_doctor_name
-from database.consultations import save_consultation_start
+from database.doctors import get_all_doctors, get_doctor_name, topic_keys_available_for_client_menu
+from database.consultations import (
+    save_consultation_start,
+    assign_pending_doctor_from_topic,
+    assign_pending_doctor_direct,
+    get_consultation_doctor_and_topic,
+)
 from database.payments import save_payment
 from database.users import save_user_if_new
 from database.support import (
@@ -34,10 +38,16 @@ from database.support import (
 )
 from utils.helpers import safe_send_message, safe_send_photo, get_anonymous_id, split_text_chunks
 from keyboards.client import (
-    get_main_keyboard, get_category_problems_keyboard, get_problem_info_keyboard,
-    get_species_keyboard, get_condition_keyboard, get_rating_keyboard,
+    TEXT_BTN_OUR_DOCTORS,
+    get_main_keyboard,
+    get_topic_pay_keyboard,
+    get_species_keyboard,
+    get_condition_keyboard,
+    get_rating_keyboard,
     get_recent_illness_keyboard,
-    get_support_keyboard, get_waiting_keyboard, get_back_keyboard,
+    get_support_keyboard,
+    get_waiting_keyboard,
+    get_back_keyboard,
     get_our_doctors_inline_keyboard,
     get_doctor_free_pay_keyboard,
     get_doctor_busy_keyboard,
@@ -57,30 +67,32 @@ from services.support_session import set_active_support_ticket
 router = Router()
 _redis = redis.from_url(REDIS_URL, decode_responses=True)
 
-# Точные подписи кнопок категорий (не использовать contains("🆘") — пересекается с «🆘 Помощь»)
-_CATEGORY_REPLY_LABELS = tuple(f"{c['emoji']} {c['name']}" for c in CATEGORIES.values())
+def _spec_key_from_menu_label(text: str | None) -> str | None:
+    """Соответствие текста кнопки темы ключу специализации (как в SPECIALISTS)."""
+    if not text:
+        return None
+    t = text.strip()
+    for key, label in SPECIALISTS.items():
+        if label == t:
+            return key
+    return None
 
-TEXT_BTN_OUR_DOCTORS = "📋 Наши врачи"
+
+async def client_main_menu_keyboard() -> ReplyKeyboardMarkup:
+    """Reply-клавиатура: темы из БД (есть онлайн-врач по специализации)."""
+    keys = await topic_keys_available_for_client_menu()
+    labels = [SPECIALISTS[k] for k in keys]
+    return get_main_keyboard(labels)
 
 
 async def _build_our_doctors_message_and_keyboard():
-    """Текст со списком врачей + инлайн-кнопки выбора.
-    Включает врачей из БД и недостающие роли из config.DOCTORS (в т.ч. gp — врач общей практики).
-    """
+    """Список врачей только из БД (активные врачи)."""
     db_rows = await get_all_doctors()
-    seen_pairs = {(r[0], r[2]) for r in db_rows}
-    extra: list[tuple[int, str, str]] = []
-    for spec_key in SPECIALIZATION_KEYS:
-        for tid in DOCTORS.get(spec_key, []):
-            if (tid, spec_key) in seen_pairs:
-                continue
-            seen_pairs.add((tid, spec_key))
-            name = await get_doctor_name(tid)
-            extra.append((tid, name, spec_key))
-    rows = extra + list(db_rows)
+    if not db_rows:
+        return None, None
     lines_body = ["👨‍⚕️ <b>НАШИ ВРАЧИ</b>\n", "Выберите специалиста:\n"]
     btn_rows: list[tuple[int, str]] = []
-    for telegram_id, name, spec_key in rows:
+    for telegram_id, name, spec_key in db_rows:
         spec_title = SPECIALISTS.get(spec_key, spec_key)
         lines_body.append(f"{spec_title} — {escape(name)}")
         btn_rows.append((telegram_id, f"{spec_title} — {name}"))
@@ -93,6 +105,7 @@ def _support_flow_exclude_texts() -> frozenset[str]:
     """Тексты кнопок меню и анкеты — не считать ответом в поддержку."""
     s = {
         "🆘 Помощь",
+        TEXT_BTN_OUR_DOCTORS,
         "📋 Мои консультации",
         "🔙 Назад",
         "🐕 Собака",
@@ -106,10 +119,8 @@ def _support_flow_exclude_texts() -> frozenset[str]:
         "🟡 Упитанный",
         "🔴 Ожирение",
     }
-    for c in CATEGORIES.values():
-        s.add(f"{c['emoji']} {c['name']}")
-    for p in PROBLEMS.values():
-        s.add(p["name"])
+    for label in SPECIALISTS.values():
+        s.add(label)
     return frozenset(s)
 
 
@@ -234,13 +245,21 @@ async def start_command(message: Message, state: FSMContext):
         return
 
     await safe_send_message(user_id, "⌨️ Обновляю меню…", reply_markup=ReplyKeyboardRemove())
-    await safe_send_message(
-        user_id,
-        "🐾 <b>Добро пожаловать в онлайн-консультации ветклиники!</b>\n\n"
-        "Выберите категорию проблемы:",
-        reply_markup=get_main_keyboard(),
-        parse_mode="HTML",
-    )
+    kb = await client_main_menu_keyboard()
+    keys = await topic_keys_available_for_client_menu()
+    if keys:
+        welcome = (
+            "🐾 <b>Добро пожаловать в онлайн-консультации ветклиники!</b>\n\n"
+            "Выберите <b>тему</b> консультации — доступны направления, "
+            "по которым сейчас есть врачи в сети."
+        )
+    else:
+        welcome = (
+            "🐾 <b>Добро пожаловать!</b>\n\n"
+            "Сейчас нет врачей онлайн ни по одному направлению. "
+            "Попробуйте позже или загляните в раздел «Наши врачи» / напишите в поддержку."
+        )
+    await safe_send_message(user_id, welcome, reply_markup=kb, parse_mode="HTML")
     await _sync_cmds()
 
 
@@ -280,10 +299,11 @@ async def panel_mode_callback(call: CallbackQuery, state: FSMContext):
         )
     else:
         await safe_send_message(user_id, "⌨️ Обновляю меню…", reply_markup=ReplyKeyboardRemove())
+        kb = await client_main_menu_keyboard()
         await safe_send_message(
             user_id,
-            "🐾 Выберите категорию проблемы:",
-            reply_markup=get_main_keyboard(),
+            "🐾 <b>Клиентский режим</b>\nВыберите тему консультации:",
+            reply_markup=kb,
             parse_mode="HTML",
         )
     await apply_commands_for_user(call.bot, user_id)
@@ -330,10 +350,11 @@ async def cmd_client_panel(message: Message, state: FSMContext):
     uid = message.from_user.id
     set_panel_mode(uid, "client")
     await safe_send_message(uid, "⌨️ Обновляю меню…", reply_markup=ReplyKeyboardRemove())
+    kb = await client_main_menu_keyboard()
     await safe_send_message(
         uid,
-        "🐾 <b>Клиентский режим</b>\nВыберите категорию проблемы:",
-        reply_markup=get_main_keyboard(),
+        "🐾 <b>Клиентский режим</b>\nВыберите тему консультации:",
+        reply_markup=kb,
         parse_mode="HTML",
     )
     await apply_commands_for_user(message.bot, uid)
@@ -344,11 +365,10 @@ async def our_doctors_open(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if not await user_in_client_context(user_id):
         return
-    rows = await get_all_doctors()
-    if not rows:
+    text, kb = await _build_our_doctors_message_and_keyboard()
+    if not text or not kb:
         await safe_send_message(user_id, "📭 Список врачей пока пуст. Обратитесь к администратору.")
         return
-    text, kb = await _build_our_doctors_message_and_keyboard()
     await safe_send_message(user_id, text, reply_markup=kb, parse_mode="HTML")
 
 
@@ -400,11 +420,10 @@ async def our_doctors_reopen_list(call: CallbackQuery):
     if not await user_in_client_context(user_id):
         await call.answer("⛔", show_alert=True)
         return
-    rows = await get_all_doctors()
-    if not rows:
+    text, kb = await _build_our_doctors_message_and_keyboard()
+    if not text or not kb:
         await call.answer("Список пуст", show_alert=True)
         return
-    text, kb = await _build_our_doctors_message_and_keyboard()
     await call.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await call.answer()
 
@@ -431,7 +450,7 @@ async def doc_busy_queue_hint(call: CallbackQuery):
     await call.answer()
     await call.message.answer(
         "📋 <b>Общая очередь</b>\n\n"
-        "Нажмите /start и выберите категорию проблемы — заявка попадёт ко всем подходящим врачам.",
+        "Нажмите /start и выберите тему консультации — вас закрепят за врачом этого направления.",
         parse_mode="HTML",
     )
 
@@ -479,103 +498,79 @@ async def pay_direct_doctor(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-@router.message(F.text.in_(_CATEGORY_REPLY_LABELS))
-async def select_category(message: Message, state: FSMContext):
+@router.message(
+    F.text,
+    lambda m: _spec_key_from_menu_label(m.text) is not None,
+)
+async def select_topic(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if not await user_in_client_context(user_id):
         return
-    
-    selected_category = None
-    for cat_key, cat_data in CATEGORIES.items():
-        if message.text == f"{cat_data['emoji']} {cat_data['name']}":
-            selected_category = cat_key
-            break
-    
-    if not selected_category:
+    key = _spec_key_from_menu_label(message.text)
+    if not key:
         return
-    
-    await state.update_data(selected_category=selected_category)
+    available = await topic_keys_available_for_client_menu()
+    if key not in available:
+        await safe_send_message(
+            user_id,
+            "⚠️ Эта тема сейчас недоступна (нет врачей онлайн). Нажмите /start, чтобы обновить меню.",
+        )
+        return
+
+    title = SPECIALISTS[key]
+    price = DEFAULT_CONSULTATION_PRICE
+    await state.update_data(
+        problem_key=key,
+        selected_problem=key,
+        problem_name=title,
+        problem_price=price,
+    )
     await safe_send_message(
         user_id,
-        f"📋 <b>{CATEGORIES[selected_category]['name']}</b>\n\n"
-        f"Выберите проблему:",
-        reply_markup=get_category_problems_keyboard(selected_category),
-        parse_mode="HTML"
+        f"📋 <b>{escape(title)}</b>\n\n"
+        f"💰 Стоимость: {price} ₽\n\n"
+        f"После оплаты вы заполните информацию о питомце.",
+        reply_markup=get_topic_pay_keyboard(key),
+        parse_mode="HTML",
     )
 
 
-@router.message(lambda m: m.text in [p["name"] for p in PROBLEMS.values()])
-async def select_problem(message: Message, state: FSMContext):
-    user_id = message.from_user.id
+@router.callback_query(lambda c: c.data and c.data.startswith("pay_topic:"))
+async def pay_topic(call: CallbackQuery, state: FSMContext):
+    spec_key = call.data.split(":", 1)[1]
+    if spec_key not in SPECIALISTS:
+        await call.answer("Некорректная тема", show_alert=True)
+        return
+    user_id = call.from_user.id
     if not await user_in_client_context(user_id):
+        await call.answer("⛔", show_alert=True)
         return
-    
-    selected_problem = None
-    for prob_key, prob_data in PROBLEMS.items():
-        if message.text == prob_data["name"]:
-            selected_problem = prob_key
-            break
-    
-    if not selected_problem:
+    available = await topic_keys_available_for_client_menu()
+    if spec_key not in available:
+        await call.answer("Тема недоступна (нет врачей онлайн)", show_alert=True)
         return
-    
-    prob_data = PROBLEMS[selected_problem]
-    
-    specialists_list = []
-    for spec in prob_data.get("specialists", []):
-        specialists_list.append(SPECIALISTS.get(spec, spec))
-    
-    specialists_text = ", ".join(specialists_list) if specialists_list else "Любой специалист"
-    
-    await state.update_data(
-        selected_problem=selected_problem,
-        problem_name=prob_data["name"],
-        problem_price=prob_data["price"],
-        problem_specialists=prob_data.get("specialists", []),
-        problem_description=prob_data.get("description", "")
-    )
-    
-    if prob_data.get("urgent", False):
-        urgent_text = "\n\n⚠️ <b>Это экстренный случай! Врач свяжется с вами в ближайшее время.</b>"
-    else:
-        urgent_text = ""
-    
-    await safe_send_message(
-        user_id,
-        f"📋 <b>{prob_data['name']}</b>\n\n"
-        f"📝 {prob_data['description']}\n\n"
-        f"👨‍⚕️ Специалисты: {specialists_text}\n"
-        f"💰 Стоимость: {prob_data['price']} ₽{urgent_text}\n\n"
-        f"После оплаты вам нужно будет заполнить информацию о питомце.",
-        reply_markup=get_problem_info_keyboard(selected_problem),
-        parse_mode="HTML"
-    )
 
-
-@router.callback_query(lambda c: c.data.startswith("pay_problem:"))
-async def pay_problem(call: CallbackQuery, state: FSMContext):
-    problem_key = call.data.split(":")[1]
-    if problem_key == "direct_booking":
-        await call.answer("Откройте «📋 Наши врачи» и выберите врача", show_alert=True)
-        return
-    prob_data = PROBLEMS[problem_key]
-    
+    title = SPECIALISTS[spec_key]
+    price = DEFAULT_CONSULTATION_PRICE
     await state.update_data(
-        problem_key=problem_key,
-        problem_price=prob_data["price"]
+        problem_key=spec_key,
+        selected_problem=spec_key,
+        problem_name=title,
+        problem_price=price,
     )
-    
     await call.message.edit_text(
         f"💰 <b>Оплата консультации</b>\n\n"
-        f"Услуга: {prob_data['name']}\n"
-        f"Сумма: {prob_data['price']} ₽\n\n"
+        f"Тема: {escape(title)}\n"
+        f"Сумма: {price} ₽\n\n"
         f"📞 Оплата по номеру телефона (СБП):\n"
         f"<code>{PHONE_NUMBER}</code>\n\n"
         f"✅ После оплаты нажмите кнопку ниже и отправьте чек.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid_confirm")]
-        ]),
-        parse_mode="HTML"
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid_confirm")],
+            ]
+        ),
+        parse_mode="HTML",
     )
     await call.answer()
 
@@ -601,13 +596,17 @@ async def handle_receipt(message: Message, state: FSMContext):
         
         problem_key = data.get("problem_key")
         if not problem_key:
-            await safe_send_message(user_id, "❌ Ошибка: проблема не выбрана. Начните заново с /start")
+            await safe_send_message(user_id, "❌ Ошибка: тема не выбрана. Начните заново с /start")
             await state.clear()
             return
-        
-        prob_data = PROBLEMS[problem_key]
+
         anonymous_id = get_anonymous_id(problem_key, user_id)
-        disp_problem = data.get("problem_name") or prob_data["name"]
+        disp_problem = data.get("problem_name") or ""
+        if not disp_problem:
+            disp_problem = (
+                PROBLEMS.get(problem_key, {}).get("name")
+                or SPECIALISTS.get(problem_key, problem_key)
+            )
 
         consultation_id = await save_consultation_start(user_id, anonymous_id, None, problem_key)
         if not consultation_id:
@@ -617,15 +616,15 @@ async def handle_receipt(message: Message, state: FSMContext):
 
         await save_payment(user_id, consultation_id, message.photo[-1].file_id)
 
-        specialists = prob_data.get("specialists") or []
         direct_tid = data.get("direct_doctor_id")
         notified = False
 
         if direct_tid:
-            dtargets = int(direct_tid)
-            dnm = await get_doctor_name(dtargets)
+            tid = int(direct_tid)
+            await assign_pending_doctor_direct(consultation_id, tid)
+            dnm = await get_doctor_name(tid)
             await safe_send_photo(
-                dtargets,
+                tid,
                 message.photo[-1].file_id,
                 caption=f"🧾 <b>НОВЫЙ ЧЕК</b>\n"
                 f"👤 Клиент: {anonymous_id}\n"
@@ -638,22 +637,22 @@ async def handle_receipt(message: Message, state: FSMContext):
             )
             notified = True
         else:
-            for spec in specialists:
-                doctor_id = get_doctor_by_specialization(spec)
-                if doctor_id:
-                    await safe_send_photo(
-                        doctor_id,
-                        message.photo[-1].file_id,
-                        caption=f"🧾 <b>НОВЫЙ ЧЕК</b>\n"
-                        f"👤 Клиент: {anonymous_id}\n"
-                        f"📂 Проблема: {disp_problem}\n"
-                        f"👨‍⚕️ Специализация: {SPECIALISTS.get(spec, spec)}\n\n"
-                        f"Подтвердите оплату кнопкой ниже или командой:\n"
-                        f"<code>/confirm_payment {user_id}</code>",
-                        parse_mode="HTML",
-                        reply_markup=get_confirm_payment_inline_keyboard(user_id),
-                    )
-                    notified = True
+            assigned_tid = await assign_pending_doctor_from_topic(consultation_id, problem_key)
+            if assigned_tid:
+                spec_lbl = SPECIALISTS.get(problem_key, problem_key)
+                await safe_send_photo(
+                    assigned_tid,
+                    message.photo[-1].file_id,
+                    caption=f"🧾 <b>НОВЫЙ ЧЕК</b>\n"
+                    f"👤 Клиент: {anonymous_id}\n"
+                    f"📂 Тема: <b>{escape(disp_problem)}</b>\n"
+                    f"👨‍⚕️ Направление: {escape(spec_lbl)}\n\n"
+                    f"Подтвердите оплату кнопкой ниже или командой:\n"
+                    f"<code>/confirm_payment {user_id}</code>",
+                    parse_mode="HTML",
+                    reply_markup=get_confirm_payment_inline_keyboard(user_id),
+                )
+                notified = True
 
         if not notified:
             from config import ADMIN_IDS
@@ -661,11 +660,10 @@ async def handle_receipt(message: Message, state: FSMContext):
                 await safe_send_photo(
                     admin_id,
                     message.photo[-1].file_id,
-                    caption=f"🧾 <b>НОВЫЙ ЧЕК (нет подходящего врача)</b>\n"
-                            f"👤 Клиент: {anonymous_id}\n"
-                            f"📂 Проблема: {disp_problem}\n"
-                            f"Требуемые специалисты: {', '.join(specialists) or '—'}\n\n"
-                            f"<code>/confirm_payment {user_id}</code>",
+                    caption=f"🧾 <b>НОВЫЙ ЧЕК (нет врача онлайн по теме)</b>\n"
+                    f"👤 Клиент: {anonymous_id}\n"
+                    f"📂 Тема: {escape(disp_problem)} ({problem_key})\n\n"
+                    f"<code>/confirm_payment {user_id}</code>",
                     parse_mode="HTML",
                     reply_markup=get_confirm_payment_inline_keyboard(user_id),
                 )
@@ -853,22 +851,6 @@ async def process_recent_illness(message: Message, state: FSMContext):
     await send_pet_info_to_doctor(message, state)
 
 
-def _vet_notification_targets(specialists: list[str]) -> list[int]:
-    """ID врачей: сначала ОП (gp), затем по специализациям проблемы — без дублей."""
-    seen: set[int] = set()
-    ordered: list[int] = []
-    for tid in DOCTORS.get("gp", []):
-        if tid not in seen:
-            seen.add(tid)
-            ordered.append(tid)
-    for spec in specialists:
-        for tid in DOCTORS.get(spec, []):
-            if tid not in seen:
-                seen.add(tid)
-                ordered.append(tid)
-    return ordered
-
-
 async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     data = await state.get_data()
 
@@ -922,16 +904,12 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
         f"🩺 Болезни за последний месяц: {escape(str(recent_illness))}\n"
     )
 
-    cursor = await db.execute(
-        "SELECT problem_key FROM consultations WHERE id = ?", (consultation_id,)
-    )
-    pk_row = await cursor.fetchone()
-    problem_key = pk_row[0] if pk_row else None
-    prob_data = PROBLEMS.get(problem_key, {}) if problem_key else {}
-    specialists = prob_data.get("specialists") or []
-    notified_doctors = set()
+    doc_row = await get_consultation_doctor_and_topic(consultation_id)
+    assigned_id = int(doc_row[0]) if doc_row and doc_row[0] is not None else None
 
+    notified_doctors = set()
     direct_tid = data.get("direct_doctor_id")
+
     if direct_tid:
         t_id = int(direct_tid)
         sent = await safe_send_message(
@@ -942,17 +920,16 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
         )
         if sent is not None:
             notified_doctors.add(t_id)
+    elif assigned_id is not None:
+        sent = await safe_send_message(
+            assigned_id,
+            vet_message,
+            parse_mode="HTML",
+            reply_markup=get_start_consultation_keyboard(uid, consultation_id),
+        )
+        if sent is not None:
+            notified_doctors.add(assigned_id)
     else:
-        for doctor_tid in _vet_notification_targets(specialists):
-            sent = await safe_send_message(
-                doctor_tid,
-                vet_message,
-                parse_mode="HTML",
-                reply_markup=get_start_consultation_keyboard(uid, consultation_id),
-            )
-            if sent is not None:
-                notified_doctors.add(doctor_tid)
-    if not notified_doctors:
         for row in await get_all_doctors():
             doctor_tid = row[0]
             sent = await safe_send_message(
@@ -963,23 +940,37 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
             )
             if sent is not None:
                 notified_doctors.add(doctor_tid)
-    
-    queue_position = await add_to_queue("all", uid, anonymous_id)
+
+    use_queue = assigned_id is None and not direct_tid
+    queue_position = None
+    if use_queue:
+        queue_position = await add_to_queue("all", uid, anonymous_id)
 
     if not notified_doctors:
         await safe_send_message(
             uid,
-            "⚠️ Не удалось отправить анкету врачам (нет доставки в Telegram). "
+            "⚠️ Не удалось отправить анкету врачу (нет доставки в Telegram). "
             "Напишите в «🆘 Помощь» — администратор поможет.\n\n"
-            f"Вы в общей очереди, позиция: {queue_position}.",
+            + (
+                f"Вы в общей очереди, позиция: {queue_position}."
+                if queue_position is not None
+                else "Попробуйте /start позже."
+            ),
             reply_markup=ReplyKeyboardRemove(),
         )
-    else:
+    elif queue_position is not None:
         await safe_send_message(
             uid,
             "✅ Информация о питомце передана врачу!\n\n"
             f"Вы добавлены в очередь. Позиция: {queue_position}.\n"
             "Врач скоро свяжется с вами.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    else:
+        await safe_send_message(
+            uid,
+            "✅ Информация о питомце передана назначенному врачу!\n"
+            "Он получит анкету и сможет начать консультацию.",
             reply_markup=ReplyKeyboardRemove(),
         )
     
@@ -1138,56 +1129,33 @@ async def forward_to_admin(message: Message, state: FSMContext):
 
 @router.message(F.text == "🔙 Назад")
 async def back_to_previous(message: Message, state: FSMContext):
-    data = await state.get_data()
-    selected_category = data.get("selected_category")
-    
-    if selected_category:
-        await safe_send_message(
-            message.from_user.id,
-            f"📋 <b>{CATEGORIES[selected_category]['name']}</b>\n\n"
-            f"Выберите проблему:",
-            reply_markup=get_category_problems_keyboard(selected_category),
-            parse_mode="HTML"
-        )
-    else:
-        await safe_send_message(
-            message.from_user.id,
-            "🐾 Выберите категорию проблемы:",
-            reply_markup=get_main_keyboard(),
-            parse_mode="HTML"
-        )
-
-
-@router.callback_query(lambda c: c.data == "back_to_category")
-async def back_to_category(call: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    selected_category = data.get("selected_category")
-    
-    if selected_category:
-        await call.message.edit_text(
-            f"📋 <b>{CATEGORIES[selected_category]['name']}</b>\n\n"
-            f"Выберите проблему:",
-            reply_markup=get_category_problems_keyboard(selected_category),
-            parse_mode="HTML"
-        )
-    else:
-        await call.message.edit_text(
-            "🐾 Выберите категорию проблемы:",
-            reply_markup=get_main_keyboard(),
-            parse_mode="HTML"
-        )
-    await call.answer()
-
-
-@router.callback_query(lambda c: c.data == "back_to_main")
-async def back_to_main(call: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await call.message.edit_text(
-        "🐾 Выберите категорию проблемы:",
-        reply_markup=get_main_keyboard(),
-        parse_mode="HTML"
+    kb = await client_main_menu_keyboard()
+    await safe_send_message(
+        message.from_user.id,
+        "🐾 <b>Выберите тему консультации:</b>\n\n"
+        "Показаны только направления, по которым сейчас есть врачи в сети.",
+        reply_markup=kb,
+        parse_mode="HTML",
     )
+
+
+@router.callback_query(
+    lambda c: c.data in ("back_to_topics", "back_to_main", "back_to_category"),
+)
+async def back_to_topics_inline(call: CallbackQuery, state: FSMContext):
+    await state.clear()
     await call.answer()
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    kb = await client_main_menu_keyboard()
+    await safe_send_message(
+        call.from_user.id,
+        "🐾 <b>Выберите тему консультации:</b>",
+        reply_markup=kb,
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(lambda c: c.data == "my_cons")
