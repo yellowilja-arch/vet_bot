@@ -26,9 +26,16 @@ from services.validators import (
     get_client_consultation_id,
     get_doctor_status,
     get_current_client,
+    get_doctor_status_symbol,
 )
 from database.queue import add_to_queue
-from database.doctors import get_all_doctors, get_doctor_name, topic_keys_available_for_client_menu
+from database.doctors import (
+    get_all_doctors,
+    get_doctor_name,
+    topic_keys_available_for_client_menu,
+    get_public_doctors_for_client,
+    is_active_public_doctor,
+)
 from database.consultations import (
     save_consultation_start,
     assign_pending_doctor_from_topic,
@@ -93,16 +100,22 @@ async def client_main_menu_keyboard() -> ReplyKeyboardMarkup:
 
 
 async def _build_our_doctors_message_and_keyboard():
-    """Список врачей только из БД (активные врачи)."""
-    db_rows = await get_all_doctors()
+    """Список врачей: только активные с реальным Telegram ID; статус — 🟢🔴⚪."""
+    db_rows = await get_public_doctors_for_client()
     if not db_rows:
         return None, None
     lines_body = ["👨‍⚕️ <b>НАШИ ВРАЧИ</b>\n", "Выберите специалиста:\n"]
     btn_rows: list[tuple[int, str]] = []
     for telegram_id, name, spec_key in db_rows:
         spec_title = SPECIALISTS.get(spec_key, spec_key)
-        lines_body.append(f"{spec_title} — {escape(name)}")
-        btn_rows.append((telegram_id, f"{spec_title} — {name}"))
+        sym = get_doctor_status_symbol(telegram_id)
+        busy_note = ""
+        if get_doctor_status(telegram_id) == "online" and get_current_client(telegram_id):
+            busy_note = " (в консультации)"
+        lines_body.append(f"{sym} {spec_title} — {escape(name)}{busy_note}")
+        btn_rows.append((telegram_id, f"{sym} {spec_title} — {name}"))
+    lines_body.append("")
+    lines_body.append("<i>🟢 — свободен · 🔴 — в консультации · ⚪ — не в сети</i>")
     text = "\n".join(lines_body)
     kb = get_our_doctors_inline_keyboard(btn_rows)
     return text, kb
@@ -390,31 +403,34 @@ async def our_doctor_selected(call: CallbackQuery, state: FSMContext):
     except (ValueError, IndexError):
         await call.answer("Ошибка", show_alert=True)
         return
+    if not await is_active_public_doctor(tid):
+        await call.answer("Этот врач недоступен в списке.", show_alert=True)
+        return
     name = await get_doctor_name(tid)
     online = get_doctor_status(tid) == "online"
     busy = get_current_client(tid) is not None
 
     if online and not busy:
         await call.message.edit_text(
-            f"✅ Врач <b>{escape(name)}</b> готов принять консультацию!\n"
-            f"💰 Стоимость: 500 ₽",
+            f"🟢 Врач <b>{escape(name)}</b> готов принять консультацию!\n\n"
+            f"💰 Стоимость: {DEFAULT_CONSULTATION_PRICE} ₽",
             reply_markup=get_doctor_free_pay_keyboard(tid),
             parse_mode="HTML",
         )
     elif online and busy:
         await call.message.edit_text(
-            f"⚠️ Врач <b>{escape(name)}</b> сейчас занят.\n\n"
+            f"🔴 Врач <b>{escape(name)}</b> сейчас ведёт консультацию.\n\n"
             f"Вы можете:\n"
             f"• Ожидать освобождения\n"
             f"• Выбрать другого врача\n"
-            f"• Оставить заявку в общую очередь (через категории проблем)",
+            f"• Оставить заявку в общую очередь (через главное меню)",
             reply_markup=get_doctor_busy_keyboard(tid),
             parse_mode="HTML",
         )
     else:
         await call.message.edit_text(
-            f"⚠️ Врач <b>{escape(name)}</b> сейчас не в сети.\n"
-            f"Пожалуйста, выберите другого врача или оформите консультацию по симптомам.",
+            f"⚪ Врач <b>{escape(name)}</b> сейчас не в сети.\n\n"
+            f"Пожалуйста, выберите другого врача или выберите тему в главном меню.",
             reply_markup=get_doctor_offline_keyboard(),
             parse_mode="HTML",
         )
@@ -447,7 +463,7 @@ async def our_doctors_close(call: CallbackQuery):
 @router.callback_query(F.data.startswith("docbusy_wait:"))
 async def doc_busy_wait_info(call: CallbackQuery):
     await call.answer(
-        "Попробуйте позже снова открыть «Наши врачи» или оформите запись через категории.",
+        "Попробуйте позже снова открыть «Наши врачи» или выберите тему в главном меню.",
         show_alert=True,
     )
 
