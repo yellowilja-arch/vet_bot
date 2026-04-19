@@ -172,18 +172,67 @@ async def restore_queue_from_db():
         print(f"🔄 Восстановлена очередь {topic}: {len(rows)} клиентов")
 
 
-async def clear_queue(topic: str):
-    """Очищает всю очередь (для админов)"""
-    queue_key = f"queue:{topic}"
-    set_key = f"queue_set:{topic}"
-    
-    r.delete(queue_key)
-    r.delete(set_key)
-    
+async def clear_queue(topic: str) -> tuple[list[int], list[int]]:
+    """
+    Очищает очередь (Redis + SQLite).
+    Возвращает (все client_id из сброшенной очереди, кому слать уведомление в Telegram).
+    Уведомление пропускаем, если у клиента уже есть консультация в статусе active (редкий битый кейс).
+    """
+    from services.dialog_session import clear_dialog_session
+
     db = await get_db()
     async with _db_lock:
-        await db.execute('''
+        cursor = await db.execute(
+            """
+            SELECT DISTINCT user_id FROM queue
+            WHERE topic = ? AND status IN ("waiting", "processing")
+            """,
+            (topic,),
+        )
+        user_ids = [int(row[0]) for row in await cursor.fetchall()]
+
+    queue_key = f"queue:{topic}"
+    set_key = f"queue_set:{topic}"
+    r.delete(queue_key)
+    r.delete(set_key)
+
+    async with _db_lock:
+        await db.execute(
+            """
             UPDATE queue SET status = "cancelled"
             WHERE topic = ? AND status IN ("waiting", "processing")
-        ''', (topic,))
+            """,
+            (topic,),
+        )
+        if user_ids:
+            placeholders = ",".join("?" * len(user_ids))
+            await db.execute(
+                f"""
+                UPDATE consultations
+                SET doctor_id = NULL, doctor_name = NULL, doctor_specialization = NULL
+                WHERE status = "paid" AND client_id IN ({placeholders})
+                """,
+                user_ids,
+            )
         await db.commit()
+
+    active_ids: set[int] = set()
+    if user_ids:
+        async with _db_lock:
+            ph = ",".join("?" * len(user_ids))
+            cur = await db.execute(
+                f"SELECT client_id FROM consultations WHERE status = 'active' AND client_id IN ({ph})",
+                user_ids,
+            )
+            active_ids = {int(r[0]) for r in await cur.fetchall()}
+
+    for uid in user_ids:
+        r.delete(f"user:{uid}:queue_position")
+        if uid in active_ids:
+            continue
+        r.delete(f"client:{uid}:doctor")
+        r.delete(f"client:{uid}:consultation")
+        clear_dialog_session(uid)
+
+    notify_ids = [u for u in user_ids if u not in active_ids]
+    return user_ids, notify_ids
