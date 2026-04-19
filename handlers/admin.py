@@ -14,7 +14,7 @@ from services.reset_tools import reset_user_state, reset_all_states, close_stuck
 from database.users import get_user_info, get_recent_users
 from database.doctors import add_doctor, remove_doctor, get_all_doctors, DOCTOR_IDS
 from database.queue import get_queue_length, clear_queue
-from database.db import get_db
+from database.db import get_db, checkpoint_wal_for_backup
 from utils.helpers import safe_send_message
 from keyboards.admin import get_support_queue_keyboard, get_add_doctor_spec_keyboard
 from data.problems import SPECIALISTS, SPECIALIZATION_KEYS
@@ -74,6 +74,8 @@ async def _admin_send_sqlite_backup(
         if not os.path.isfile(db_file):
             await safe_send_message(admin_id, "❌ Файл базы данных не найден!")
             return
+
+        await checkpoint_wal_for_backup()
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_name = f"vet_bot_backup_{timestamp}.db"
