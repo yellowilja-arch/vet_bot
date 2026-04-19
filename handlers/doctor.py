@@ -6,21 +6,90 @@ r = redis.from_url(REDIS_URL, decode_responses=True)
 from aiogram import Router, F
 from aiogram.filters import Command, BaseFilter
 from aiogram.enums import MessageEntityType
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from config import SPECIALISTS
 from services.validators import is_doctor, get_doctor_status, get_current_client, set_doctor_status, set_current_client, update_doctor_activity, clear_session
 from services.routing import get_doctor_by_specialization
-from database.queue import pop_from_queue, get_queue_length, confirm_queue_processed
+from database.queue import pop_from_queue, get_queue_length, confirm_queue_processed, remove_from_queue
 from database.consultations import update_consultation_doctor, save_consultation_end
 from database.payments import confirm_payment, get_pending_payment
 from database.doctors import get_doctor_name
 from utils.helpers import safe_send_message, get_anonymous_id
-from keyboards.doctor import get_doctor_main_keyboard, get_doctor_status_keyboard, get_doctor_actions_keyboard
+from keyboards.doctor import (
+    get_doctor_main_keyboard,
+    get_doctor_status_keyboard,
+    get_doctor_actions_keyboard,
+)
 from states.forms import QuestionnaireState
 
 router = Router()
+
+
+async def _run_confirm_payment_flow(doctor_id: int, client_id: int, state: FSMContext, bot_id: int) -> bool:
+    """Подтверждение оплаты и запуск анкеты у клиента."""
+    payment = await get_pending_payment(client_id)
+    if not payment:
+        await safe_send_message(doctor_id, "❌ Платёж не найден или уже подтверждён")
+        return False
+    _pid, consultation_id = payment
+    if not await confirm_payment(client_id, consultation_id):
+        await safe_send_message(doctor_id, "❌ Ошибка подтверждения")
+        await safe_send_message(client_id, "❌ Ошибка подтверждения оплаты")
+        return False
+    await safe_send_message(client_id, "✅ Оплата подтверждена!")
+    await safe_send_message(doctor_id, "✅ Оплата подтверждена")
+    client_state = FSMContext(
+        storage=state.storage,
+        key=StorageKey(bot_id=bot_id, chat_id=client_id, user_id=client_id),
+    )
+    await client_state.update_data(consultation_id=consultation_id, problem_name="Консультация")
+    from keyboards.client import get_species_keyboard
+    await client_state.set_state(QuestionnaireState.waiting_species)
+    await safe_send_message(
+        client_id,
+        "📋 <b>Пожалуйста, заполните информацию о питомце</b>\n\n"
+        "Выберите вид животного:",
+        reply_markup=get_species_keyboard(),
+        parse_mode="HTML",
+    )
+    return True
+
+
+async def execute_take_client(
+    doctor_id: int,
+    client_id: int,
+    consultation_id: int,
+    queue_id: int | None = None,
+) -> bool:
+    """Назначить врача на оплаченную консультацию и связать чат."""
+    from database.db import get_db
+
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT client_id, status FROM consultations WHERE id = ?",
+        (consultation_id,),
+    )
+    row = await cur.fetchone()
+    if not row or int(row[0]) != int(client_id) or row[1] != "paid":
+        return False
+    if queue_id is not None:
+        await confirm_queue_processed(queue_id)
+    await remove_from_queue("all", int(client_id))
+    doctor_name = await get_doctor_name(doctor_id)
+    await update_consultation_doctor(consultation_id, doctor_id, doctor_name)
+    set_current_client(doctor_id, client_id)
+    r.set(f"client:{client_id}:doctor", doctor_id)
+    await safe_send_message(
+        int(client_id),
+        "✅ Врач принял заявку! Консультация начинается.\n\n"
+        "Напишите сообщение врачу.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await safe_send_message(doctor_id, "✅ Клиент принят. Напишите сообщение.")
+    update_doctor_activity(doctor_id)
+    return True
 
 
 def _not_a_bot_command(message: Message) -> bool:
@@ -94,43 +163,67 @@ async def confirm_payment_command(message: Message, state: FSMContext):
         await safe_send_message(doctor_id, "⚠️ user_id должен быть числом")
         return
     
-    payment = await get_pending_payment(client_id)
-    if not payment:
-        await safe_send_message(doctor_id, "❌ Платёж не найден или уже подтверждён")
+    await _run_confirm_payment_flow(doctor_id, client_id, state, message.bot.id)
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("cfm_pay:"))
+async def confirm_payment_callback(call: CallbackQuery, state: FSMContext):
+    doctor_id = call.from_user.id
+    if not await is_doctor(doctor_id):
+        await call.answer("⛔ Только для врачей", show_alert=True)
         return
-    
-    payment_id, consultation_id = payment
-    
-    if await confirm_payment(client_id, consultation_id):
-        await safe_send_message(client_id, "✅ Оплата подтверждена!")
-        await safe_send_message(doctor_id, "✅ Оплата подтверждена")
+    try:
+        client_id = int(call.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await call.answer("Некорректные данные", show_alert=True)
+        return
+    ok = await _run_confirm_payment_flow(doctor_id, client_id, state, call.bot.id)
+    await call.answer("Готово" if ok else "Ошибка", show_alert=not ok)
 
-        client_state = FSMContext(
-            storage=state.storage,
-            key=StorageKey(
-                bot_id=message.bot.id,
-                chat_id=client_id,
-                user_id=client_id
-            )
+
+async def run_next_from_queue(doctor_id: int) -> None:
+    if get_current_client(doctor_id):
+        await safe_send_message(doctor_id, "⚠️ У вас уже есть активный клиент. Завершите его сначала.")
+        return
+
+    from database.db import get_db
+
+    db = await get_db()
+    consultation_id = None
+    client_id = anonymous_id = queue_id = None
+
+    for _ in range(25):
+        popped = await pop_from_queue("all")
+        if not popped[0]:
+            await safe_send_message(doctor_id, "📭 В очереди нет клиентов.")
+            return
+        client_id, anonymous_id, queue_id = popped
+        cursor = await db.execute(
+            """
+            SELECT id, problem_key FROM consultations 
+            WHERE client_id = ? AND status = "paid"
+            ORDER BY id DESC LIMIT 1
+            """,
+            (client_id,),
         )
-        await client_state.update_data(
-            consultation_id=consultation_id,
-            problem_name="Консультация"
-        )
+        row = await cursor.fetchone()
+        if row:
+            consultation_id, _problem_key = row
+            break
+        await confirm_queue_processed(queue_id)
 
-        from keyboards.client import get_species_keyboard
-        await client_state.set_state(QuestionnaireState.waiting_species)
-
+    if not consultation_id:
         await safe_send_message(
-            client_id,
-            "📋 <b>Пожалуйста, заполните информацию о питомце</b>\n\n"
-            "Выберите вид животного:",
-            reply_markup=get_species_keyboard(),
-            parse_mode="HTML"
+            doctor_id,
+            "❌ В очереди нет заявок с оплаченной консультацией. Попросите админа: /clearqueue",
         )
-    else:
-        await safe_send_message(doctor_id, "❌ Ошибка подтверждения")
-        await safe_send_message(client_id, "❌ Ошибка подтверждения оплаты")
+        return
+
+    if not await execute_take_client(doctor_id, client_id, consultation_id, queue_id):
+        await safe_send_message(
+            doctor_id,
+            "❌ Не удалось начать консультацию (статус консультации изменился).",
+        )
 
 
 @router.message(Command("next"))
@@ -138,52 +231,45 @@ async def next_command(message: Message):
     user_id = message.from_user.id
     if not await is_doctor(user_id):
         return
-    
-    if get_current_client(user_id):
-        await safe_send_message(user_id, "⚠️ У вас уже есть активный клиент. Завершите его сначала.")
-        return
-    
-    from database.db import get_db
-    db = await get_db()
-    consultation_id = None
-    problem_key = None
-    client_id = anonymous_id = queue_id = None
+    await run_next_from_queue(user_id)
 
-    for _ in range(25):
-        popped = await pop_from_queue("all")
-        if not popped[0]:
-            await safe_send_message(user_id, "📭 В очереди нет клиентов.")
-            return
-        client_id, anonymous_id, queue_id = popped
-        cursor = await db.execute('''
-            SELECT id, problem_key FROM consultations 
-            WHERE client_id = ? AND status = "paid"
-            ORDER BY id DESC LIMIT 1
-        ''', (client_id,))
-        row = await cursor.fetchone()
-        if row:
-            consultation_id, problem_key = row
-            break
-        await confirm_queue_processed(queue_id)
 
-    if not consultation_id:
-        await safe_send_message(
-            user_id,
-            "❌ В очереди нет заявок с оплаченной консультацией. Попросите админа: /clearqueue",
-        )
+@router.callback_query(lambda c: c.data == "doctor_next")
+async def doctor_next_callback(call: CallbackQuery):
+    doctor_id = call.from_user.id
+    if not await is_doctor(doctor_id):
+        await call.answer("⛔", show_alert=True)
         return
-    
-    doctor_name = await get_doctor_name(user_id)
-    await update_consultation_doctor(consultation_id, user_id, doctor_name)
-    
-    set_current_client(user_id, client_id)
-    r.set(f"client:{client_id}:doctor", user_id)
-    
-    await confirm_queue_processed(queue_id)
-    
-    await safe_send_message(client_id, f"✅ Врач принял заявку! Консультация начинается.")
-    await safe_send_message(user_id, f"✅ Клиент принят. Напишите сообщение.")
-    update_doctor_activity(user_id)
+    await run_next_from_queue(doctor_id)
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("take_cn:"))
+async def take_consultation_callback(call: CallbackQuery):
+    doctor_id = call.from_user.id
+    if not await is_doctor(doctor_id):
+        await call.answer("⛔ Только для врачей", show_alert=True)
+        return
+    if get_current_client(doctor_id):
+        await call.answer("Сначала завершите текущую консультацию (/end).", show_alert=True)
+        return
+    parts = call.data.split(":")
+    if len(parts) != 3:
+        await call.answer("Ошибка данных", show_alert=True)
+        return
+    try:
+        client_id = int(parts[1])
+        consultation_id = int(parts[2])
+    except ValueError:
+        await call.answer("Ошибка данных", show_alert=True)
+        return
+    ok = await execute_take_client(doctor_id, client_id, consultation_id, None)
+    await call.answer("Консультация началась" if ok else "Не удалось начать", show_alert=not ok)
+    if ok:
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
 
 @router.message(Command("end"))

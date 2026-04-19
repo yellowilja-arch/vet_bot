@@ -1,9 +1,11 @@
+import redis
+
 from aiogram import Router, F
-from aiogram.filters import Command
+from aiogram.filters import Command, BaseFilter
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from html import escape
-from config import PHONE_NUMBER, DOCTORS
+from config import PHONE_NUMBER, DOCTORS, REDIS_URL
 from data.problems import CATEGORIES, PROBLEMS, SPECIALISTS
 from services.validators import is_blocked, is_doctor
 from services.routing import get_doctor_by_specialization
@@ -17,10 +19,28 @@ from keyboards.client import (
     get_species_keyboard, get_condition_keyboard, get_rating_keyboard,
     get_support_keyboard, get_waiting_keyboard, get_back_keyboard
 )
-from keyboards.doctor import get_doctor_main_keyboard
+from keyboards.doctor import (
+    get_doctor_main_keyboard,
+    get_confirm_payment_inline_keyboard,
+    get_start_consultation_keyboard,
+)
 from states.forms import PaymentState, QuestionnaireState, WaitingState
 
 router = Router()
+_redis = redis.from_url(REDIS_URL, decode_responses=True)
+
+
+class ClientActiveConsultFilter(BaseFilter):
+    """Сообщения клиента в активной консультации (пересылка врачу). Регистрируйте хендлер последним."""
+
+    async def __call__(self, message: Message) -> bool:
+        if message.chat.type != "private":
+            return False
+        if await is_doctor(message.from_user.id):
+            return False
+        if not _redis.get(f"client:{message.from_user.id}:doctor"):
+            return False
+        return bool(message.text or message.photo)
 
 
 def _client_telegram_id(message: Message) -> int:
@@ -54,12 +74,13 @@ async def start_command(message: Message, state: FSMContext):
         )
         return
     
+    await safe_send_message(user_id, "⌨️ Обновляю меню…", reply_markup=ReplyKeyboardRemove())
     await safe_send_message(
         user_id,
         "🐾 <b>Добро пожаловать в онлайн-консультации ветклиники!</b>\n\n"
         "Выберите категорию проблемы:",
         reply_markup=get_main_keyboard(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
@@ -212,9 +233,10 @@ async def handle_receipt(message: Message, state: FSMContext):
                             f"👤 Клиент: {anonymous_id}\n"
                             f"📂 Проблема: {prob_data['name']}\n"
                             f"👨‍⚕️ Специализация: {SPECIALISTS.get(spec, spec)}\n\n"
-                            f"Для подтверждения оплаты используйте:\n"
+                            f"Подтвердите оплату кнопкой ниже или командой:\n"
                             f"<code>/confirm_payment {user_id}</code>",
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=get_confirm_payment_inline_keyboard(user_id),
                 )
                 notified = True
         
@@ -229,7 +251,8 @@ async def handle_receipt(message: Message, state: FSMContext):
                             f"📂 Проблема: {prob_data['name']}\n"
                             f"Требуемые специалисты: {', '.join(specialists)}\n\n"
                             f"<code>/confirm_payment {user_id}</code>",
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=get_confirm_payment_inline_keyboard(user_id),
                 )
         
         await safe_send_message(
@@ -383,6 +406,8 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
         WHERE id = ?
     ''', (species, age, weight, breed, condition, chronic, consultation_id))
     await db.commit()
+
+    uid = _client_telegram_id(message)
     
     vet_message = (
         f"🆕 <b>НОВАЯ КОНСУЛЬТАЦИЯ</b>\n\n"
@@ -410,14 +435,23 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
             if doctor_tid in notified_doctors:
                 continue
             notified_doctors.add(doctor_tid)
-            await safe_send_message(doctor_tid, vet_message, parse_mode="HTML")
+            await safe_send_message(
+                doctor_tid,
+                vet_message,
+                parse_mode="HTML",
+                reply_markup=get_start_consultation_keyboard(uid, consultation_id),
+            )
     if not notified_doctors:
         from database.doctors import get_all_doctors
         for row in await get_all_doctors():
             doctor_tid = row[0]
-            await safe_send_message(doctor_tid, vet_message, parse_mode="HTML")
+            await safe_send_message(
+                doctor_tid,
+                vet_message,
+                parse_mode="HTML",
+                reply_markup=get_start_consultation_keyboard(uid, consultation_id),
+            )
     
-    uid = _client_telegram_id(message)
     queue_position = await add_to_queue("all", uid, anonymous_id)
     
     await safe_send_message(
@@ -597,3 +631,25 @@ async def back_to_main(call: CallbackQuery, state: FSMContext):
 async def my_cons_callback(call: CallbackQuery):
     await my_consultations(call.message)
     await call.answer()
+
+
+@router.message(ClientActiveConsultFilter())
+async def relay_client_to_doctor(message: Message):
+    """Текст/фото от клиента к назначенному врачу (после /next или кнопки «Начать консультацию»)."""
+    from services.validators import update_client_activity
+
+    raw = _redis.get(f"client:{message.from_user.id}:doctor")
+    if not raw:
+        return
+    doctor_id = int(raw)
+    uid = message.from_user.id
+    if message.text:
+        await safe_send_message(doctor_id, f"👤 Клиент: {message.text}")
+    elif message.photo:
+        cap = message.caption or "📷 фото"
+        await safe_send_photo(
+            doctor_id,
+            message.photo[-1].file_id,
+            caption=f"👤 Клиент: {cap}",
+        )
+    update_client_activity(uid)
