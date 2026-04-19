@@ -1,9 +1,9 @@
 from aiogram import Router, F
 from aiogram.filters import Command, StateFilter
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.fsm.context import FSMContext
 from html import escape
-from config import ADMIN_IDS, REDIS_URL, SUPPORT_TEMPLATE_TEXT
+from config import ADMIN_IDS, DB_PATH, REDIS_URL, SUPPORT_TEMPLATE_TEXT
 from services.validators import (
     get_doctor_status,
     is_admin,
@@ -25,7 +25,11 @@ from database.support import (
     list_open_requests,
 )
 from states.forms import WaitingState, AdminState
+import os
+import shutil
+import tempfile
 import redis
+from datetime import datetime
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -47,6 +51,70 @@ async def admin_clear_queue(message: Message):
         return
     await clear_queue("all")
     await safe_send_message(user_id, "✅ Очередь all очищена (Redis + записи waiting/processing в БД).")
+
+
+async def _admin_send_sqlite_backup(
+    bot,
+    admin_id: int,
+    attach_to_message: Message | None,
+    *,
+    announce_progress: bool = True,
+) -> None:
+    """Копирует SQLite БД и отправляет .db файл администратору."""
+    if not await user_in_admin_context(admin_id):
+        await safe_send_message(admin_id, "⛔ Только для администраторов")
+        return
+
+    if announce_progress:
+        await safe_send_message(admin_id, "⏳ Создаю бэкап базы данных...")
+
+    temp_path: str | None = None
+    try:
+        db_file = os.path.abspath(DB_PATH)
+        if not os.path.isfile(db_file):
+            await safe_send_message(admin_id, "❌ Файл базы данных не найден!")
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_name = f"vet_bot_backup_{timestamp}.db"
+        temp_path = os.path.join(tempfile.gettempdir(), backup_name)
+        shutil.copy2(db_file, temp_path)
+        size_b = os.path.getsize(temp_path)
+        document = FSInputFile(temp_path, filename=backup_name)
+        caption = f"✅ Бэкап БД от {timestamp}\n📦 Размер: {size_b} байт"
+        if attach_to_message is not None:
+            await attach_to_message.answer_document(document=document, caption=caption)
+        else:
+            await bot.send_document(admin_id, document=document, caption=caption)
+    except Exception as e:
+        await safe_send_message(
+            admin_id,
+            f"❌ Ошибка создания бэкапа:\n<pre>{escape(str(e))}</pre>",
+            parse_mode="HTML",
+        )
+    finally:
+        if temp_path and os.path.isfile(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
+@router.message(F.text == "💾 Бэкап")
+async def admin_backup_reply_button(message: Message):
+    """Reply-кнопка «💾 Бэкап» в панели администратора."""
+    await _admin_send_sqlite_backup(message.bot, message.from_user.id, message)
+
+
+@router.callback_query(F.data == "admin_backup")
+async def admin_backup_callback(call: CallbackQuery):
+    """Инлайн-кнопка с тем же callback (если используется в другой сборке)."""
+    admin_id = call.from_user.id
+    if not await user_in_admin_context(admin_id):
+        await call.answer("⛔ Только для администраторов", show_alert=True)
+        return
+    await call.answer("⏳ Создаю бэкап...")
+    await _admin_send_sqlite_backup(call.bot, admin_id, call.message, announce_progress=False)
 
 
 @router.message(Command("stats"))
