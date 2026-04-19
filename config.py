@@ -52,7 +52,10 @@ MAX_ACTIVE_PER_DOCTOR = 3
 
 from data.problems import SPECIALISTS, SPECIALIZATION_KEYS  # noqa: E402
 
-# Врачи по специализациям (Telegram ID) — дублирует БД для маршрутизации; обновляется из БД при load_doctors
+# Стоимость консультации при выборе темы из меню (динамический список из БД)
+DEFAULT_CONSULTATION_PRICE = 500
+
+# Врачи по специализациям (Telegram ID) — legacy из конфига; основная маршрутизация — через БД
 DOCTORS = {
     "gp": [1092230808],
     "therapist": [1906114179],
