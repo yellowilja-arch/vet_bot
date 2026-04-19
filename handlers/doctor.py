@@ -551,7 +551,9 @@ async def redirect_execute(call: CallbackQuery):
     db = await get_db()
     cur_sql = await db.execute(
         """
-        SELECT client_anonymous_id, problem_key, pet_species, pet_age, pet_weight, pet_breed, pet_condition, pet_chronic
+        SELECT client_anonymous_id, problem_key,
+               pet_name, pet_species, pet_age, pet_weight, pet_breed, pet_condition, pet_chronic,
+               recent_illness
         FROM consultations WHERE id = ?
         """,
         (consultation_id,),
@@ -565,15 +567,28 @@ async def redirect_execute(call: CallbackQuery):
         f"📋 <b>Данные из опросника</b>\n"
     )
     if qrow:
-        _anon, pk, sp, ag, w, br, cond, chr = qrow
+        (
+            _anon,
+            pk,
+            pet_nm,
+            sp,
+            ag,
+            w,
+            br,
+            cond,
+            chr,
+            recent_ill,
+        ) = qrow
         head += (
             f"Проблема (ключ): {escape(pk or '—')}\n"
+            f"Имя питомца: {escape(pet_nm or '—')}\n"
             f"Вид: {escape(sp or '—')}\n"
             f"Возраст: {escape(ag or '—')}\n"
             f"Вес: {escape(w or '—')}\n"
             f"Порода: {escape(br or '—')}\n"
             f"Упитанность: {escape(cond or '—')}\n"
-            f"Хроника: {escape(chr or '—')}\n\n"
+            f"Хроника: {escape(chr or '—')}\n"
+            f"За последний месяц: {escape(recent_ill or '—')}\n\n"
         )
     head += "💬 <b>Переписка до перенаправления</b>\n"
     await safe_send_message(target_tid, head, parse_mode="HTML")
