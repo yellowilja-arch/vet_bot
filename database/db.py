@@ -120,6 +120,12 @@ async def init_db():
         print("✅ Колонка pet_chronic добавлена")
     except:
         pass
+
+    try:
+        await db.execute('ALTER TABLE consultations ADD COLUMN recent_illness TEXT')
+        print("✅ Колонка recent_illness добавлена")
+    except:
+        pass
     
     # Уникальный индекс для активных консультаций
     await db.execute('''
