@@ -86,7 +86,8 @@ def get_support_keyboard():
     """Клавиатура для поддержки"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Написать администратору", callback_data="contact_admin")],
-        [InlineKeyboardButton(text="📋 Мои консультации", callback_data="my_cons")]
+        [InlineKeyboardButton(text="📜 История переписки", callback_data="support_history")],
+        [InlineKeyboardButton(text="📋 Мои консультации", callback_data="my_cons")],
     ])
 
 
