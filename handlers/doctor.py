@@ -29,7 +29,12 @@ from services.validators import (
 from database.queue import pop_from_queue, get_queue_length, confirm_queue_processed, remove_from_queue
 from database.consultations import update_consultation_doctor, save_consultation_end
 from database.payments import confirm_payment, get_pending_payment
-from database.doctors import get_doctor_name, get_doctor_specialization, get_all_doctors
+from database.doctors import (
+    get_doctor_name,
+    get_doctor_specialization,
+    get_all_doctors,
+    specialization_display_label,
+)
 from utils.helpers import safe_send_message, safe_send_photo, split_text_chunks
 from keyboards.doctor import (
     get_doctor_main_keyboard,
@@ -126,15 +131,25 @@ async def execute_take_client(
         await confirm_queue_processed(queue_id)
     await remove_from_queue("all", int(client_id))
     doctor_name = await get_doctor_name(doctor_id)
-    doctor_spec = await get_doctor_specialization(doctor_id) or "—"
+    raw_spec = await get_doctor_specialization(doctor_id)
+    doctor_spec = raw_spec or "—"
+    spec_display = specialization_display_label(raw_spec)
     await update_consultation_doctor(consultation_id, doctor_id, doctor_name, doctor_spec)
     set_current_client(doctor_id, client_id)
     r.set(f"client:{client_id}:doctor", str(doctor_id))
     set_client_consultation(int(client_id), consultation_id)
     await safe_send_message(
         int(client_id),
-        "✅ Врач принял заявку! Консультация начинается.\n\n"
-        "Напишите сообщение врачу.",
+        (
+            "✅ <b>Консультация начата!</b>\n\n"
+            f"👨‍⚕️ <b>Ваш врач:</b> {escape(doctor_name)}\n"
+            f"📂 <b>Специализация:</b> {escape(spec_display)}\n"
+            f"🆔 <b>ID консультации:</b> #{consultation_id}\n\n"
+            "💬 Напишите сообщение, чтобы задать вопрос врачу.\n"
+            "📎 Вы можете отправлять фото, видео и документы.\n\n"
+            "❌ Для завершения консультации используйте команду <b>/end</b>"
+        ),
+        parse_mode="HTML",
         reply_markup=ReplyKeyboardRemove(),
     )
     await safe_send_message(
