@@ -143,25 +143,35 @@ async def next_command(message: Message):
         await safe_send_message(user_id, "⚠️ У вас уже есть активный клиент. Завершите его сначала.")
         return
     
-    client_id, anonymous_id, queue_id = await pop_from_queue("all")
-    if not client_id:
-        await safe_send_message(user_id, "📭 В очереди нет клиентов.")
-        return
-    
     from database.db import get_db
     db = await get_db()
-    cursor = await db.execute('''
-        SELECT id, problem_key FROM consultations 
-        WHERE client_id = ? AND status = "paid"
-        ORDER BY id DESC LIMIT 1
-    ''', (client_id,))
-    row = await cursor.fetchone()
-    
-    if not row:
-        await safe_send_message(user_id, "❌ Консультация не найдена")
+    consultation_id = None
+    problem_key = None
+    client_id = anonymous_id = queue_id = None
+
+    for _ in range(25):
+        popped = await pop_from_queue("all")
+        if not popped[0]:
+            await safe_send_message(user_id, "📭 В очереди нет клиентов.")
+            return
+        client_id, anonymous_id, queue_id = popped
+        cursor = await db.execute('''
+            SELECT id, problem_key FROM consultations 
+            WHERE client_id = ? AND status = "paid"
+            ORDER BY id DESC LIMIT 1
+        ''', (client_id,))
+        row = await cursor.fetchone()
+        if row:
+            consultation_id, problem_key = row
+            break
+        await confirm_queue_processed(queue_id)
+
+    if not consultation_id:
+        await safe_send_message(
+            user_id,
+            "❌ В очереди нет заявок с оплаченной консультацией. Попросите админа: /clearqueue",
+        )
         return
-    
-    consultation_id, problem_key = row
     
     doctor_name = await get_doctor_name(user_id)
     await update_consultation_doctor(consultation_id, user_id, doctor_name)

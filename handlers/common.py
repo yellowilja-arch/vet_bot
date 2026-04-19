@@ -11,7 +11,6 @@ from database.users import save_user_if_new
 from utils.helpers import safe_send_message, safe_send_photo, get_anonymous_id
 from keyboards.client import get_main_keyboard
 from keyboards.doctor import get_doctor_main_keyboard, get_doctor_status_keyboard
-from keyboards.admin import get_admin_main_keyboard
 from states.forms import PaymentState
 
 r = redis.from_url(REDIS_URL, decode_responses=True)

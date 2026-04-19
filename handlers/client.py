@@ -3,7 +3,7 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from html import escape
-from config import PHONE_NUMBER
+from config import PHONE_NUMBER, DOCTORS
 from data.problems import CATEGORIES, PROBLEMS, SPECIALISTS
 from services.validators import is_blocked, is_doctor
 from services.routing import get_doctor_by_specialization
@@ -65,7 +65,7 @@ async def start_command(message: Message, state: FSMContext):
 
 @router.message(F.text.contains("🩺") | F.text.contains("🦴") | F.text.contains("❤️") | 
                F.text.contains("🦷") | F.text.contains("🐱") | F.text.contains("🤰") |
-               F.text.contains("🆘") | F.text.contains("👨‍⚕️"))
+               F.text.contains("🆘") | F.text.contains("🎯"))
 async def select_category(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if await is_doctor(user_id):
@@ -365,7 +365,11 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     chronic = data.get("chronic", "Не указано")
     consultation_id = data.get("consultation_id")
     anonymous_id = data.get("anonymous_id", "anon")
-    
+    if not consultation_id:
+        uid = _client_telegram_id(message)
+        await safe_send_message(uid, "❌ Ошибка: консультация не найдена. Начните с /start")
+        return
+
     from database.db import get_db
     db = await get_db()
     await db.execute('''
@@ -392,6 +396,26 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
         f"📊 Упитанность: {condition}\n"
         f"💊 Хронические заболевания: {chronic}\n"
     )
+
+    cursor = await db.execute(
+        "SELECT problem_key FROM consultations WHERE id = ?", (consultation_id,)
+    )
+    pk_row = await cursor.fetchone()
+    problem_key = pk_row[0] if pk_row else None
+    prob_data = PROBLEMS.get(problem_key, {}) if problem_key else {}
+    specialists = prob_data.get("specialists", [])
+    notified_doctors = set()
+    for spec in specialists:
+        for doctor_tid in DOCTORS.get(spec, []):
+            if doctor_tid in notified_doctors:
+                continue
+            notified_doctors.add(doctor_tid)
+            await safe_send_message(doctor_tid, vet_message, parse_mode="HTML")
+    if not notified_doctors:
+        from database.doctors import get_all_doctors
+        for row in await get_all_doctors():
+            doctor_tid = row[0]
+            await safe_send_message(doctor_tid, vet_message, parse_mode="HTML")
     
     uid = _client_telegram_id(message)
     queue_position = await add_to_queue("all", uid, anonymous_id)

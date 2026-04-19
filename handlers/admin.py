@@ -8,7 +8,7 @@ from services.validators import is_doctor, get_doctor_status
 from services.reset_tools import reset_user_state, reset_all_states, close_stuck_requests, unlock_all_doctors
 from database.users import get_user_info, get_recent_users
 from database.doctors import add_doctor, remove_doctor, get_all_doctors, DOCTOR_IDS
-from database.queue import get_queue_length
+from database.queue import get_queue_length, clear_queue
 from database.db import get_db
 from utils.helpers import safe_send_message
 from keyboards.admin import get_admin_support_keyboard
@@ -26,6 +26,16 @@ def _parse_int(value: str):
         return int(value)
     except ValueError:
         return None
+
+
+@router.message(Command("clearqueue"))
+async def admin_clear_queue(message: Message):
+    """Сброс Redis/SQLite очереди (в т.ч. после тестов с битым client_id)."""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    await clear_queue("all")
+    await safe_send_message(user_id, "✅ Очередь all очищена (Redis + записи waiting/processing в БД).")
 
 
 @router.message(Command("stats"))
