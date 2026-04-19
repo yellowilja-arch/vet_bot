@@ -184,6 +184,33 @@ async def init_db():
             resolved_at TIMESTAMP
         )
     ''')
+
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS support_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id INTEGER NOT NULL,
+            sender_role TEXT NOT NULL,
+            sender_id INTEGER NOT NULL,
+            body TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (request_id) REFERENCES support_requests(id)
+        )
+    ''')
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_support_messages_request ON support_messages(request_id)'
+    )
+
+    # Статусы: open | closed (миграция со старых new/replied)
+    try:
+        await db.execute(
+            "UPDATE support_requests SET status = 'closed' WHERE status = 'replied'"
+        )
+        await db.execute(
+            "UPDATE support_requests SET status = 'open' WHERE status = 'new'"
+        )
+        await db.commit()
+    except Exception:
+        pass
     
     # Обратная связь
     await db.execute('''
@@ -215,4 +242,12 @@ async def init_db():
         pass
     
     await db.commit()
+
+    try:
+        from database.support import backfill_messages_from_legacy
+
+        await backfill_messages_from_legacy()
+    except Exception as e:
+        logging.warning("support_messages backfill: %s", e)
+
     print("✅ База данных SQLite инициализирована")
