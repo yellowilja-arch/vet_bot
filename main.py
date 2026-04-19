@@ -8,6 +8,7 @@ import redis.asyncio as redis_async
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from config import BOT_TOKEN, ADMIN_IDS, REDIS_URL
 from handlers import register_handlers
+from services.bot_commands import default_scope_commands
 from workers.backups import backup_worker
 from workers.inactivity import inactivity_worker
 from utils.helpers import safe_send_message
@@ -66,6 +67,8 @@ async def main():
     # Удаляем webhook, если активен
     await bot.delete_webhook()
     logging.info("✅ Webhook удалён")
+    await bot.set_my_commands(default_scope_commands())
+    logging.info("✅ Меню команд по умолчанию (клиент) установлено")
     
     # Запуск фоновых задач
     asyncio.create_task(backup_worker())

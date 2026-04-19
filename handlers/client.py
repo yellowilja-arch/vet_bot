@@ -36,9 +36,13 @@ from keyboards.doctor import (
     get_start_consultation_keyboard,
 )
 from states.forms import PaymentState, QuestionnaireState, WaitingState
+from services.bot_commands import apply_commands_for_user
 
 router = Router()
 _redis = redis.from_url(REDIS_URL, decode_responses=True)
+
+# Точные подписи кнопок категорий (не использовать contains("🆘") — пересекается с «🆘 Помощь»)
+_CATEGORY_REPLY_LABELS = tuple(f"{c['emoji']} {c['name']}" for c in CATEGORIES.values())
 
 
 class ClientActiveConsultFilter(BaseFilter):
@@ -87,6 +91,9 @@ async def start_command(message: Message, state: FSMContext):
         await safe_send_message(user_id, "⛔ Ваш аккаунт заблокирован.")
         return
 
+    async def _sync_cmds() -> None:
+        await apply_commands_for_user(message.bot, user_id)
+
     is_doc = await is_doctor(user_id)
     is_adm = user_id in ADMIN_IDS
     if is_adm and is_doc and get_panel_mode(user_id) is None:
@@ -96,6 +103,7 @@ async def start_command(message: Message, state: FSMContext):
             "Выберите режим интерфейса (потом можно сменить: /doctor, /admin, /client):",
             reply_markup=_panel_pick_keyboard(),
         )
+        await _sync_cmds()
         return
 
     if await user_in_admin_context(user_id):
@@ -105,6 +113,7 @@ async def start_command(message: Message, state: FSMContext):
             reply_markup=get_admin_main_keyboard(),
             parse_mode="HTML",
         )
+        await _sync_cmds()
         return
 
     if await user_in_doctor_context(user_id):
@@ -114,6 +123,7 @@ async def start_command(message: Message, state: FSMContext):
             reply_markup=get_doctor_main_keyboard(),
             parse_mode="HTML",
         )
+        await _sync_cmds()
         return
 
     await safe_send_message(user_id, "⌨️ Обновляю меню…", reply_markup=ReplyKeyboardRemove())
@@ -124,6 +134,7 @@ async def start_command(message: Message, state: FSMContext):
         reply_markup=get_main_keyboard(),
         parse_mode="HTML",
     )
+    await _sync_cmds()
 
 
 @router.callback_query(lambda c: c.data and c.data.startswith("panel:"))
@@ -168,6 +179,7 @@ async def panel_mode_callback(call: CallbackQuery, state: FSMContext):
             reply_markup=get_main_keyboard(),
             parse_mode="HTML",
         )
+    await apply_commands_for_user(call.bot, user_id)
 
 
 @router.message(Command("doctor"))
@@ -184,6 +196,7 @@ async def cmd_doctor_panel(message: Message, state: FSMContext):
         reply_markup=get_doctor_main_keyboard(),
         parse_mode="HTML",
     )
+    await apply_commands_for_user(message.bot, uid)
 
 
 @router.message(Command("admin"))
@@ -200,6 +213,7 @@ async def cmd_admin_panel(message: Message, state: FSMContext):
         reply_markup=get_admin_main_keyboard(),
         parse_mode="HTML",
     )
+    await apply_commands_for_user(message.bot, uid)
 
 
 @router.message(Command("client"))
@@ -215,11 +229,10 @@ async def cmd_client_panel(message: Message, state: FSMContext):
         reply_markup=get_main_keyboard(),
         parse_mode="HTML",
     )
+    await apply_commands_for_user(message.bot, uid)
 
 
-@router.message(F.text.contains("🩺") | F.text.contains("🦴") | F.text.contains("❤️") | 
-               F.text.contains("🦷") | F.text.contains("🐱") | F.text.contains("🤰") |
-               F.text.contains("🆘") | F.text.contains("🎯"))
+@router.message(F.text.in_(_CATEGORY_REPLY_LABELS))
 async def select_category(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if not await user_in_client_context(user_id):
