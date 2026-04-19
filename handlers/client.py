@@ -23,7 +23,12 @@ from database.queue import add_to_queue
 from database.consultations import save_consultation_start
 from database.payments import save_payment
 from database.users import save_user_if_new
-from database.support import create_support_ticket, format_user_history
+from database.support import (
+    add_support_message,
+    create_support_ticket,
+    ensure_active_support_ticket_for_client,
+    format_user_history,
+)
 from utils.helpers import safe_send_message, safe_send_photo, get_anonymous_id, split_text_chunks
 from keyboards.client import (
     get_main_keyboard, get_category_problems_keyboard, get_problem_info_keyboard,
@@ -38,13 +43,77 @@ from keyboards.doctor import (
 )
 from states.forms import PaymentState, QuestionnaireState, WaitingState
 from services.bot_commands import apply_commands_for_user
-from services.notifications import notify_support_ticket_created
+from services.notifications import notify_admins_client_support_reply, notify_support_ticket_created
+from services.support_session import set_active_support_ticket
 
 router = Router()
 _redis = redis.from_url(REDIS_URL, decode_responses=True)
 
 # Точные подписи кнопок категорий (не использовать contains("🆘") — пересекается с «🆘 Помощь»)
 _CATEGORY_REPLY_LABELS = tuple(f"{c['emoji']} {c['name']}" for c in CATEGORIES.values())
+
+
+def _support_flow_exclude_texts() -> frozenset[str]:
+    """Тексты кнопок меню и анкеты — не считать ответом в поддержку."""
+    s = {
+        "🆘 Помощь",
+        "📋 Мои консультации",
+        "🔙 Назад",
+        "🐕 Собака",
+        "🐈 Кошка",
+        "🐇 Грызун",
+        "🐦 Птица",
+        "📝 Другое",
+        "❌ Отмена",
+        "🟢 Худощавый",
+        "🟢 Нормальный",
+        "🟡 Упитанный",
+        "🔴 Ожирение",
+    }
+    for c in CATEGORIES.values():
+        s.add(f"{c['emoji']} {c['name']}")
+    for p in PROBLEMS.values():
+        s.add(p["name"])
+    return frozenset(s)
+
+
+_SUPPORT_FLOW_EXCLUDE_TEXTS = _support_flow_exclude_texts()
+
+
+class ClientSupportFollowupFilter(BaseFilter):
+    """Текстовое сообщение клиента в открытом обращении (не первое, не меню, не консультация с врачом)."""
+
+    async def __call__(self, message: Message, **kwargs) -> bool:
+        if message.chat.type != "private":
+            return False
+        if not message.text or not message.text.strip():
+            return False
+        raw = message.text.strip()
+        if raw.startswith("/"):
+            return False
+        if raw in _SUPPORT_FLOW_EXCLUDE_TEXTS:
+            return False
+        uid = message.from_user.id
+        if not await user_in_client_context(uid):
+            return False
+        state: FSMContext | None = kwargs.get("state")
+        if state is not None:
+            st = await state.get_state()
+            if st:
+                if st.startswith("PaymentState") or st.startswith("QuestionnaireState"):
+                    return False
+                if st in (
+                    WaitingState.waiting_for_admin_message.state,
+                    WaitingState.waiting_for_doctor.state,
+                    WaitingState.waiting_for_specific_doctor.state,
+                    WaitingState.waiting_for_feedback.state,
+                    WaitingState.waiting_for_rating_comment.state,
+                ):
+                    return False
+        if _redis.get(f"client:{uid}:doctor"):
+            return False
+        rid = await ensure_active_support_ticket_for_client(uid)
+        return rid is not None
 
 
 class ClientActiveConsultFilter(BaseFilter):
@@ -744,6 +813,7 @@ async def forward_to_admin(message: Message, state: FSMContext):
 
     text = message.text.strip()
     request_id = await create_support_ticket(user_id, display_for_db, text)
+    set_active_support_ticket(user_id, request_id)
 
     await notify_support_ticket_created(
         user_id,
@@ -820,6 +890,24 @@ async def back_to_main(call: CallbackQuery, state: FSMContext):
 async def my_cons_callback(call: CallbackQuery):
     await my_consultations(call.message)
     await call.answer()
+
+
+@router.message(ClientSupportFollowupFilter())
+async def client_support_followup(message: Message):
+    """Ответ клиента в уже открытом обращении (после шаблона/сообщений админа)."""
+    uid = message.from_user.id
+    txt = message.text.strip()
+    rid = await ensure_active_support_ticket_for_client(uid)
+    if not rid:
+        return
+    await add_support_message(rid, "client", uid, txt)
+    await notify_admins_client_support_reply(
+        uid,
+        message.from_user.username,
+        message.from_user.first_name,
+        rid,
+        txt,
+    )
 
 
 @router.message(ClientActiveConsultFilter())
