@@ -1,5 +1,5 @@
 import redis
-from config import REDIS_URL, INITIAL_DOCTORS
+from config import REDIS_URL, INITIAL_DOCTORS, SPECIALISTS
 from database.db import get_db
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
@@ -50,6 +50,13 @@ async def get_doctor_specialization(doctor_id: int) -> str | None:
     )
     row = await cursor.fetchone()
     return row[0] if row else None
+
+
+def specialization_display_label(spec_key: str | None) -> str:
+    """Человекочитаемое название специализации по ключу из БД."""
+    if not spec_key:
+        return "Не указана"
+    return SPECIALISTS.get(spec_key, spec_key)
 
 async def get_all_doctors():
     """Возвращает список всех активных врачей"""
