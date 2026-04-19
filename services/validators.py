@@ -76,7 +76,84 @@ def update_client_activity(client_id):
 def clear_session(client_id, doctor_id):
     """Очищает сессию клиента и врача в Redis"""
     r.delete(f"client:{client_id}:doctor")
+    r.delete(f"client:{client_id}:consultation")
     r.delete(f"doctor:{doctor_id}:current_client")
+
+
+def get_panel_mode(user_id: int) -> str | None:
+    """Режим интерфейса: client | doctor | admin (для разных кнопок у одного Telegram ID)."""
+    return r.get(f"user:{user_id}:panel")
+
+
+def set_panel_mode(user_id: int, mode: str) -> None:
+    r.set(f"user:{user_id}:panel", mode)
+
+
+async def user_in_client_context(user_id: int) -> bool:
+    """Клиентское меню (без кнопок врача/админа)."""
+    mode = get_panel_mode(user_id)
+    if mode == "client":
+        return True
+    if mode == "doctor" or mode == "admin":
+        return False
+    if user_id in ADMIN_IDS and await is_doctor(user_id):
+        return False
+    if await is_doctor(user_id):
+        return False
+    if user_id in ADMIN_IDS:
+        return False
+    return True
+
+
+async def user_in_doctor_context(user_id: int) -> bool:
+    """Панель врача."""
+    mode = get_panel_mode(user_id)
+    if mode == "doctor":
+        return True
+    if mode == "client" or mode == "admin":
+        return False
+    if user_id in ADMIN_IDS and await is_doctor(user_id):
+        return False
+    return await is_doctor(user_id)
+
+
+async def user_in_admin_context(user_id: int) -> bool:
+    """Панель администратора (команды /admin)."""
+    mode = get_panel_mode(user_id)
+    if mode == "admin":
+        return True
+    if mode == "client" or mode == "doctor":
+        return False
+    if user_id not in ADMIN_IDS:
+        return False
+    return not await is_doctor(user_id)
+
+
+def set_client_consultation(client_id: int, consultation_id: int) -> None:
+    r.set(f"client:{client_id}:consultation", str(consultation_id))
+
+
+def get_client_consultation_id(client_id: int) -> int | None:
+    raw = r.get(f"client:{client_id}:consultation")
+    try:
+        return int(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+
+
+def append_consultation_chat_line(consultation_id: int, line: str) -> None:
+    r.rpush(f"consultation:{consultation_id}:chat", line)
+
+
+def get_consultation_chat_text(consultation_id: int) -> str:
+    lines = r.lrange(f"consultation:{consultation_id}:chat", 0, -1)
+    if not lines:
+        return "(сообщений в переписке ещё не было)"
+    return "\n".join(lines)
+
+
+def clear_consultation_chat(consultation_id: int) -> None:
+    r.delete(f"consultation:{consultation_id}:chat")
 
 
 async def is_payment_confirmed(consultation_id: int):

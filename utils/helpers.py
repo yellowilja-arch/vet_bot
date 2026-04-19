@@ -47,6 +47,13 @@ async def safe_send_photo(chat_id, photo, caption=None, retries=3, **kwargs):
         print(f"Ошибка: {e}")
         return None
 
+def split_text_chunks(text: str, max_len: int = 4000):
+    """Разбивает текст для Telegram (лимит ~4096 символов на сообщение)."""
+    if not text:
+        return []
+    return [text[i : i + max_len] for i in range(0, len(text), max_len)]
+
+
 def get_anonymous_id(topic, user_id):
     short_id = str(user_id)[-4:]
     prefix_map = {"dentistry": "ST", "surgery": "SR", "therapy": "TP"}

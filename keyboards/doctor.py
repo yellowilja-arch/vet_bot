@@ -1,5 +1,8 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+DOCTORS_PAGE_SIZE = 8
+
+
 def get_doctor_main_keyboard():
     """Главная панель врача"""
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -24,6 +27,7 @@ def get_start_consultation_keyboard(client_user_id: int, consultation_id: int):
         [InlineKeyboardButton(text="▶️ Начать консультацию", callback_data=f"take_cn:{client_user_id}:{consultation_id}")]
     ])
 
+
 def get_doctor_status_keyboard(has_active_client: bool = False):
     """Клавиатура для просмотра статуса"""
     buttons = [[InlineKeyboardButton(text="📋 Очередь", callback_data="view_queue")]]
@@ -31,26 +35,56 @@ def get_doctor_status_keyboard(has_active_client: bool = False):
         buttons.append([InlineKeyboardButton(text="❌ Завершить текущего", callback_data="end_current")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def get_doctor_actions_keyboard(user_id):
-    """Клавиатура для действий врача во время консультации"""
+
+def get_doctor_actions_keyboard(client_id: int):
+    """Действия врача во время активной консультации (после оплаты и начала диалога)."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Завершить", callback_data=f"end_confirm:{user_id}")],
-        [InlineKeyboardButton(text="🔄 Перенаправить", callback_data=f"transfer_confirm:{user_id}")],
+        [InlineKeyboardButton(text="❌ Завершить консультацию", callback_data=f"endcf:{client_id}")],
+        [InlineKeyboardButton(text="↪️ Перенаправить другому специалисту", callback_data=f"reflist:{client_id}:0")],
         [InlineKeyboardButton(text="📋 Очередь", callback_data="view_queue")],
     ])
 
-def get_end_confirmation_keyboard(user_id):
-    """Клавиатура для подтверждения завершения"""
+
+def get_end_confirmation_keyboard(client_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Да, завершить", callback_data=f"end:{user_id}")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]
+        [InlineKeyboardButton(text="✅ Да, завершить", callback_data=f"endgo:{client_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="endcancel")],
     ])
 
-def get_transfer_menu_keyboard(user_id):
-    """Клавиатура для перенаправления клиента"""
+
+def get_redirect_doctors_keyboard(
+    client_id: int,
+    consultation_id: int,
+    rows: list[tuple[int, str]],
+    page: int,
+    has_next: bool,
+):
+    """Список врачей для перенаправления (по одному в строке)."""
+    buttons = []
+    for tid, label in rows:
+        buttons.append([
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"refsel:{tid}:{client_id}:{consultation_id}",
+            )
+        ])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"reflist:{client_id}:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"reflist:{client_id}:{page + 1}"))
+    if nav:
+        buttons.append(nav)
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="refcancel")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_redirect_confirm_keyboard(target_doctor_id: int, client_id: int, consultation_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🦷 Стоматолог", callback_data=f"to:dentistry:{user_id}")],
-        [InlineKeyboardButton(text="🔪 Хирург", callback_data=f"to:surgery:{user_id}")],
-        [InlineKeyboardButton(text="💊 Терапевт", callback_data=f"to:therapy:{user_id}")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]
+        [InlineKeyboardButton(
+            text="✅ Подтвердить перенаправление",
+            callback_data=f"refok:{target_doctor_id}:{client_id}:{consultation_id}",
+        )],
+        [InlineKeyboardButton(text="🔙 К списку врачей", callback_data=f"reflist:{client_id}:0")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="refcancel")],
     ])

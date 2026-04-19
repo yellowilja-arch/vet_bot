@@ -41,6 +41,16 @@ async def get_doctor_name(doctor_id: int):
     row = await cursor.fetchone()
     return row[0] if row else f"Врач {doctor_id}"
 
+
+async def get_doctor_specialization(doctor_id: int) -> str | None:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT specialization FROM doctors WHERE telegram_id = ? AND is_active = 1",
+        (doctor_id,),
+    )
+    row = await cursor.fetchone()
+    return row[0] if row else None
+
 async def get_all_doctors():
     """Возвращает список всех активных врачей"""
     db = await get_db()

@@ -27,7 +27,7 @@ CATEGORIES = {
     "infectious": {"name": "🐱 Инфекционные болезни", "emoji": "🐱"},
     "reproduction": {"name": "🤰 Репродуктология и неонатология", "emoji": "🤰"},
     "emergency": {"name": "🆘 Экстренная помощь", "emoji": "🆘"},
-    "specialist": {"name": "👨‍⚕️ Консультация специалиста", "emoji": "👨‍⚕️"},
+    "specialist": {"name": "🎯 Консультация специалиста", "emoji": "🎯"},
 }
 
 # Все проблемы (65 штук)
@@ -257,7 +257,7 @@ PROBLEMS = {
         "urgent": True
     },
     "second_opinion": {
-        "name": "👨‍⚕️ Получить второе мнение",
+        "name": "🎯 Получить второе мнение",
         "category": "specialist",
         "description": "Консультация узкого специалиста",
         "price": 500,
@@ -329,7 +329,7 @@ PROBLEMS = {
         "urgent": True
     },
     "specialist_consult": {
-        "name": "👨‍⚕️ Консультация у специалиста",
+        "name": "🎯 Консультация у специалиста",
         "category": "specialist",
         "description": "Приём узкого специалиста",
         "price": 500,

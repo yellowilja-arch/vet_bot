@@ -37,15 +37,23 @@ async def save_consultation_end(consultation_id: int, status: str, client_msgs: 
         await db.commit()
 
 
-async def update_consultation_doctor(consultation_id: int, doctor_id: int, doctor_name: str):
+async def update_consultation_doctor(
+    consultation_id: int,
+    doctor_id: int,
+    doctor_name: str,
+    doctor_specialization: str,
+):
     """Назначает врача консультации и активирует её"""
     db = await get_db()
     async with _db_lock:
-        await db.execute('''
-            UPDATE consultations 
-            SET doctor_id = ?, doctor_name = ?, status = 'active'
+        await db.execute(
+            """
+            UPDATE consultations
+            SET doctor_id = ?, doctor_name = ?, doctor_specialization = ?, status = 'active'
             WHERE id = ?
-        ''', (doctor_id, doctor_name, consultation_id))
+            """,
+            (doctor_id, doctor_name, doctor_specialization, consultation_id),
+        )
         await db.commit()
 
 

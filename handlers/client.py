@@ -5,9 +5,19 @@ from aiogram.filters import Command, BaseFilter
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from html import escape
-from config import PHONE_NUMBER, DOCTORS, REDIS_URL
+from config import ADMIN_IDS, PHONE_NUMBER, DOCTORS, REDIS_URL
 from data.problems import CATEGORIES, PROBLEMS, SPECIALISTS
-from services.validators import is_blocked, is_doctor
+from services.validators import (
+    is_blocked,
+    is_doctor,
+    user_in_client_context,
+    user_in_doctor_context,
+    user_in_admin_context,
+    set_panel_mode,
+    get_panel_mode,
+    append_consultation_chat_line,
+    get_client_consultation_id,
+)
 from services.routing import get_doctor_by_specialization
 from database.queue import add_to_queue
 from database.consultations import save_consultation_start
@@ -19,6 +29,7 @@ from keyboards.client import (
     get_species_keyboard, get_condition_keyboard, get_rating_keyboard,
     get_support_keyboard, get_waiting_keyboard, get_back_keyboard
 )
+from keyboards.admin import get_admin_main_keyboard
 from keyboards.doctor import (
     get_doctor_main_keyboard,
     get_confirm_payment_inline_keyboard,
@@ -36,7 +47,7 @@ class ClientActiveConsultFilter(BaseFilter):
     async def __call__(self, message: Message) -> bool:
         if message.chat.type != "private":
             return False
-        if await is_doctor(message.from_user.id):
+        if not await user_in_client_context(message.from_user.id):
             return False
         if not _redis.get(f"client:{message.from_user.id}:doctor"):
             return False
@@ -50,6 +61,16 @@ def _client_telegram_id(message: Message) -> int:
     return message.from_user.id
 
 
+def _panel_pick_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="👨‍⚕️ Панель врача", callback_data="panel:doctor")],
+            [InlineKeyboardButton(text="🛠 Панель администратора", callback_data="panel:admin")],
+            [InlineKeyboardButton(text="🐾 Клиентский режим", callback_data="panel:client")],
+        ]
+    )
+
+
 @router.message(Command("start"))
 async def start_command(message: Message, state: FSMContext):
     await state.clear()
@@ -61,19 +82,40 @@ async def start_command(message: Message, state: FSMContext):
         u.first_name,
         u.last_name,
     )
-    
+
     if await is_blocked(user_id):
         await safe_send_message(user_id, "⛔ Ваш аккаунт заблокирован.")
         return
-    
-    if await is_doctor(user_id):
+
+    is_doc = await is_doctor(user_id)
+    is_adm = user_id in ADMIN_IDS
+    if is_adm and is_doc and get_panel_mode(user_id) is None:
         await safe_send_message(
             user_id,
-            "👨‍⚕️ Вы зарегистрированы как врач. Панель управления:",
-            reply_markup=get_doctor_main_keyboard(),
+            "У вас есть и роль врача, и роль администратора.\n"
+            "Выберите режим интерфейса (потом можно сменить: /doctor, /admin, /client):",
+            reply_markup=_panel_pick_keyboard(),
         )
         return
-    
+
+    if await user_in_admin_context(user_id):
+        await safe_send_message(
+            user_id,
+            "🛠 <b>Панель администратора</b>\nКоманды: /stats, /health, /ban и др.",
+            reply_markup=get_admin_main_keyboard(),
+            parse_mode="HTML",
+        )
+        return
+
+    if await user_in_doctor_context(user_id):
+        await safe_send_message(
+            user_id,
+            "👨‍⚕️ <b>Панель врача</b>",
+            reply_markup=get_doctor_main_keyboard(),
+            parse_mode="HTML",
+        )
+        return
+
     await safe_send_message(user_id, "⌨️ Обновляю меню…", reply_markup=ReplyKeyboardRemove())
     await safe_send_message(
         user_id,
@@ -84,12 +126,103 @@ async def start_command(message: Message, state: FSMContext):
     )
 
 
+@router.callback_query(lambda c: c.data and c.data.startswith("panel:"))
+async def panel_mode_callback(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    mode = call.data.split(":", 1)[1]
+    user_id = call.from_user.id
+    if mode not in ("doctor", "admin", "client"):
+        await call.answer()
+        return
+    if mode == "doctor" and not await is_doctor(user_id):
+        await call.answer("Нет роли врача", show_alert=True)
+        return
+    if mode == "admin" and user_id not in ADMIN_IDS:
+        await call.answer("Нет прав администратора", show_alert=True)
+        return
+    set_panel_mode(user_id, mode)
+    await call.answer("Режим сохранён")
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    if mode == "doctor":
+        await safe_send_message(
+            user_id,
+            "👨‍⚕️ <b>Панель врача</b>",
+            reply_markup=get_doctor_main_keyboard(),
+            parse_mode="HTML",
+        )
+    elif mode == "admin":
+        await safe_send_message(
+            user_id,
+            "🛠 <b>Панель администратора</b>",
+            reply_markup=get_admin_main_keyboard(),
+            parse_mode="HTML",
+        )
+    else:
+        await safe_send_message(user_id, "⌨️ Обновляю меню…", reply_markup=ReplyKeyboardRemove())
+        await safe_send_message(
+            user_id,
+            "🐾 Выберите категорию проблемы:",
+            reply_markup=get_main_keyboard(),
+            parse_mode="HTML",
+        )
+
+
+@router.message(Command("doctor"))
+async def cmd_doctor_panel(message: Message, state: FSMContext):
+    await state.clear()
+    uid = message.from_user.id
+    if not await is_doctor(uid):
+        await safe_send_message(uid, "⛔ У вас нет роли врача.")
+        return
+    set_panel_mode(uid, "doctor")
+    await safe_send_message(
+        uid,
+        "👨‍⚕️ <b>Панель врача</b>",
+        reply_markup=get_doctor_main_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.message(Command("admin"))
+async def cmd_admin_panel(message: Message, state: FSMContext):
+    await state.clear()
+    uid = message.from_user.id
+    if uid not in ADMIN_IDS:
+        await safe_send_message(uid, "⛔ Нет прав администратора.")
+        return
+    set_panel_mode(uid, "admin")
+    await safe_send_message(
+        uid,
+        "🛠 <b>Панель администратора</b>",
+        reply_markup=get_admin_main_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.message(Command("client"))
+async def cmd_client_panel(message: Message, state: FSMContext):
+    """Режим клиента (для теста, если у вас также есть роль врача/админа)."""
+    await state.clear()
+    uid = message.from_user.id
+    set_panel_mode(uid, "client")
+    await safe_send_message(uid, "⌨️ Обновляю меню…", reply_markup=ReplyKeyboardRemove())
+    await safe_send_message(
+        uid,
+        "🐾 <b>Клиентский режим</b>\nВыберите категорию проблемы:",
+        reply_markup=get_main_keyboard(),
+        parse_mode="HTML",
+    )
+
+
 @router.message(F.text.contains("🩺") | F.text.contains("🦴") | F.text.contains("❤️") | 
                F.text.contains("🦷") | F.text.contains("🐱") | F.text.contains("🤰") |
                F.text.contains("🆘") | F.text.contains("🎯"))
 async def select_category(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    if await is_doctor(user_id):
+    if not await user_in_client_context(user_id):
         return
     
     selected_category = None
@@ -114,7 +247,7 @@ async def select_category(message: Message, state: FSMContext):
 @router.message(lambda m: m.text in [p["name"] for p in PROBLEMS.values()])
 async def select_problem(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    if await is_doctor(user_id):
+    if not await user_in_client_context(user_id):
         return
     
     selected_problem = None
@@ -496,10 +629,10 @@ async def skip_rating(call: CallbackQuery):
 async def my_consultations(message: Message):
     user_id = message.from_user.id
     
-    if await is_doctor(user_id):
+    if not await user_in_client_context(user_id):
         await safe_send_message(user_id, "⛔ Эта команда только для клиентов.")
         return
-    
+
     from database.consultations import get_user_consultations
     consultations = await get_user_consultations(user_id)
     
@@ -519,9 +652,9 @@ async def my_consultations(message: Message):
 @router.message(F.text == "🆘 Помощь")
 async def help_button(message: Message):
     user_id = message.from_user.id
-    
-    if await is_doctor(user_id):
-        await safe_send_message(user_id, "🆘 Для помощи обратитесь к администратору.")
+
+    if not await user_in_client_context(user_id):
+        await safe_send_message(user_id, "🆘 В панели врача/админа используйте команды или /client для клиентского меню.")
         return
     
     await safe_send_message(
@@ -643,10 +776,15 @@ async def relay_client_to_doctor(message: Message):
         return
     doctor_id = int(raw)
     uid = message.from_user.id
+    cid = get_client_consultation_id(uid)
     if message.text:
+        if cid:
+            append_consultation_chat_line(cid, f"👤 Клиент: {message.text}")
         await safe_send_message(doctor_id, f"👤 Клиент: {message.text}")
     elif message.photo:
         cap = message.caption or "📷 фото"
+        if cid:
+            append_consultation_chat_line(cid, f"👤 Клиент: [фото] {cap}")
         await safe_send_photo(
             doctor_id,
             message.photo[-1].file_id,

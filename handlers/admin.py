@@ -4,7 +4,11 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from html import escape
 from config import ADMIN_IDS
-from services.validators import is_doctor, get_doctor_status
+from services.validators import (
+    get_doctor_status,
+    user_in_admin_context,
+    user_in_client_context,
+)
 from services.reset_tools import reset_user_state, reset_all_states, close_stuck_requests, unlock_all_doctors
 from database.users import get_user_info, get_recent_users
 from database.doctors import add_doctor, remove_doctor, get_all_doctors, DOCTOR_IDS
@@ -32,7 +36,7 @@ def _parse_int(value: str):
 async def admin_clear_queue(message: Message):
     """Сброс Redis/SQLite очереди (в т.ч. после тестов с битым client_id)."""
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
+    if not await user_in_admin_context(user_id):
         return
     await clear_queue("all")
     await safe_send_message(user_id, "✅ Очередь all очищена (Redis + записи waiting/processing в БД).")
@@ -41,8 +45,8 @@ async def admin_clear_queue(message: Message):
 @router.message(Command("stats"))
 async def admin_stats(message: Message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
-        await safe_send_message(user_id, "⛔ Доступ запрещен.")
+    if not await user_in_admin_context(user_id):
+        await safe_send_message(user_id, "⛔ Доступ запрещен. Используйте /admin или /start.")
         return
     
     db = await get_db()
@@ -59,9 +63,9 @@ async def admin_stats(message: Message):
 @router.message(Command("ban"))
 async def ban_user(message: Message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
+    if not await user_in_admin_context(user_id):
         return
-    
+
     args = message.text.split()
     if len(args) < 2:
         await safe_send_message(user_id, "⚠️ /ban <user_id> [причина]")
@@ -84,9 +88,9 @@ async def ban_user(message: Message):
 @router.message(Command("unban"))
 async def unban_user(message: Message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
+    if not await user_in_admin_context(user_id):
         return
-    
+
     args = message.text.split()
     if len(args) != 2:
         await safe_send_message(user_id, "⚠️ /unban <user_id>")
@@ -108,8 +112,8 @@ async def unban_user(message: Message):
 @router.message(Command("health"))
 async def health_check(message: Message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
-        await safe_send_message(user_id, "⛔ Только для админов")
+    if not await user_in_admin_context(user_id):
+        await safe_send_message(user_id, "⛔ Только для админов. /admin")
         return
     
     try:
@@ -148,9 +152,9 @@ async def health_check(message: Message):
 @router.message(Command("user"))
 async def get_user(message: Message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
+    if not await user_in_admin_context(user_id):
         return
-    
+
     args = message.text.split()
     if len(args) != 2:
         await safe_send_message(user_id, "⚠️ /user <user_id> или /user @username")
@@ -187,9 +191,9 @@ async def get_user(message: Message):
 @router.message(Command("resetuser"))
 async def reset_user(message: Message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
+    if not await user_in_admin_context(user_id):
         return
-    
+
     args = message.text.split()
     if len(args) != 2:
         await safe_send_message(user_id, "⚠️ /resetuser <user_id>")
@@ -206,9 +210,9 @@ async def reset_user(message: Message):
 @router.message(Command("resetall"))
 async def reset_all(message: Message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
+    if not await user_in_admin_context(user_id):
         return
-    
+
     await reset_all_states()
     await safe_send_message(user_id, "✅ Все состояния сброшены")
 
@@ -216,9 +220,9 @@ async def reset_all(message: Message):
 @router.message(Command("closestuck"))
 async def close_stuck(message: Message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
+    if not await user_in_admin_context(user_id):
         return
-    
+
     await close_stuck_requests()
     await safe_send_message(user_id, "✅ Зависшие запросы закрыты")
 
@@ -226,9 +230,9 @@ async def close_stuck(message: Message):
 @router.message(Command("unlockdoctors"))
 async def unlock_doctors(message: Message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
+    if not await user_in_admin_context(user_id):
         return
-    
+
     await unlock_all_doctors()
     await safe_send_message(user_id, "✅ Все врачи разблокированы")
 
@@ -236,9 +240,9 @@ async def unlock_doctors(message: Message):
 @router.message(Command("adddoctor"))
 async def add_doctor_command(message: Message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
+    if not await user_in_admin_context(user_id):
         return
-    
+
     args = message.text.split()
     if len(args) < 4:
         await safe_send_message(user_id, "⚠️ /adddoctor <telegram_id> <имя> <specialization>")
@@ -263,9 +267,9 @@ async def add_doctor_command(message: Message):
 @router.message(Command("removedoctor"))
 async def remove_doctor_command(message: Message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
+    if not await user_in_admin_context(user_id):
         return
-    
+
     args = message.text.split()
     if len(args) != 2:
         await safe_send_message(user_id, "⚠️ /removedoctor <telegram_id>")
@@ -282,8 +286,8 @@ async def remove_doctor_command(message: Message):
 @router.message(Command("feedback"))
 async def feedback_command(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    if await is_doctor(user_id):
-        await safe_send_message(user_id, "⛔ Эта команда только для клиентов.")
+    if not await user_in_client_context(user_id):
+        await safe_send_message(user_id, "⛔ Эта команда только в клиентском режиме (/client).")
         return
     
     await state.set_state(WaitingState.waiting_for_feedback)
@@ -324,8 +328,8 @@ async def process_feedback(message: Message, state: FSMContext):
 @router.callback_query(lambda c: c.data.startswith("support_reply:"))
 async def reply_to_support(call: CallbackQuery, state: FSMContext):
     admin_id = call.from_user.id
-    if admin_id not in ADMIN_IDS:
-        await call.answer("⛔ Только для админов")
+    if not await user_in_admin_context(admin_id):
+        await call.answer("⛔ Только для админов. /admin")
         return
     
     parts = call.data.split(":")
@@ -344,7 +348,7 @@ async def reply_to_support(call: CallbackQuery, state: FSMContext):
 @router.message(WaitingState.waiting_for_support_reply)
 async def send_support_reply(message: Message, state: FSMContext):
     admin_id = message.from_user.id
-    if admin_id not in ADMIN_IDS:
+    if not await user_in_admin_context(admin_id):
         return
     
     data = await state.get_data()
