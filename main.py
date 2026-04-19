@@ -52,12 +52,15 @@ async def init_startup():
     db = await get_db()
     cursor = await db.execute('SELECT client_id, doctor_id, id FROM consultations WHERE status = "active"')
     rows = await cursor.fetchall()
+    from services.dialog_session import init_dialog_after_consultation_start
+
     for row in rows:
         client_id, doctor_id, consultation_id = row
         if doctor_id:
             r.set(f"client:{client_id}:doctor", doctor_id)
             r.set(f"client:{client_id}:consultation", consultation_id)
             r.set(f"doctor:{doctor_id}:current_client", client_id)
+            init_dialog_after_consultation_start(int(client_id), int(doctor_id))
     logging.info(f"✅ Восстановлено {len(rows)} активных консультаций")
 
 async def main():
