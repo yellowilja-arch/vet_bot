@@ -87,6 +87,15 @@ def get_rating_keyboard(consultation_id, doctor_id):
     ])
 
 
+def get_recent_illness_keyboard():
+    """Болезни за последний месяц — быстрый ответ «не болел»."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Нет, не болел", callback_data="no_recent_illness")],
+        ]
+    )
+
+
 def get_support_keyboard():
     """Клавиатура для поддержки"""
     return InlineKeyboardMarkup(inline_keyboard=[
