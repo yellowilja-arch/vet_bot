@@ -6,7 +6,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from html import escape
 from config import ADMIN_IDS, PHONE_NUMBER, DOCTORS, REDIS_URL
-from data.problems import CATEGORIES, PROBLEMS, SPECIALISTS
+from data.problems import CATEGORIES, PROBLEMS, SPECIALISTS, SPECIALIZATION_KEYS
 from services.validators import (
     is_blocked,
     is_doctor,
@@ -63,8 +63,20 @@ TEXT_BTN_OUR_DOCTORS = "📋 Наши врачи"
 
 
 async def _build_our_doctors_message_and_keyboard():
-    """Текст со списком врачей + инлайн-кнопки выбора."""
-    rows = await get_all_doctors()
+    """Текст со списком врачей + инлайн-кнопки выбора.
+    Включает врачей из БД и недостающие роли из config.DOCTORS (в т.ч. gp — врач общей практики).
+    """
+    db_rows = await get_all_doctors()
+    seen_pairs = {(r[0], r[2]) for r in db_rows}
+    extra: list[tuple[int, str, str]] = []
+    for spec_key in SPECIALIZATION_KEYS:
+        for tid in DOCTORS.get(spec_key, []):
+            if (tid, spec_key) in seen_pairs:
+                continue
+            seen_pairs.add((tid, spec_key))
+            name = await get_doctor_name(tid)
+            extra.append((tid, name, spec_key))
+    rows = extra + list(db_rows)
     lines_body = ["👨‍⚕️ <b>НАШИ ВРАЧИ</b>\n", "Выберите специалиста:\n"]
     btn_rows: list[tuple[int, str]] = []
     for telegram_id, name, spec_key in rows:
@@ -800,6 +812,22 @@ async def process_chronic(message: Message, state: FSMContext):
     await send_pet_info_to_doctor(message, state)
 
 
+def _vet_notification_targets(specialists: list[str]) -> list[int]:
+    """ID врачей: сначала ОП (gp), затем по специализациям проблемы — без дублей."""
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for tid in DOCTORS.get("gp", []):
+        if tid not in seen:
+            seen.add(tid)
+            ordered.append(tid)
+    for spec in specialists:
+        for tid in DOCTORS.get(spec, []):
+            if tid not in seen:
+                seen.add(tid)
+                ordered.append(tid)
+    return ordered
+
+
 async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     data = await state.get_data()
 
@@ -862,44 +890,54 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     direct_tid = data.get("direct_doctor_id")
     if direct_tid:
         t_id = int(direct_tid)
-        notified_doctors.add(t_id)
-        await safe_send_message(
+        sent = await safe_send_message(
             t_id,
             vet_message,
             parse_mode="HTML",
             reply_markup=get_start_consultation_keyboard(uid, consultation_id),
         )
+        if sent is not None:
+            notified_doctors.add(t_id)
     else:
-        for spec in specialists:
-            for doctor_tid in DOCTORS.get(spec, []):
-                if doctor_tid in notified_doctors:
-                    continue
-                notified_doctors.add(doctor_tid)
-                await safe_send_message(
-                    doctor_tid,
-                    vet_message,
-                    parse_mode="HTML",
-                    reply_markup=get_start_consultation_keyboard(uid, consultation_id),
-                )
-    if not notified_doctors:
-        for row in await get_all_doctors():
-            doctor_tid = row[0]
-            await safe_send_message(
+        for doctor_tid in _vet_notification_targets(specialists):
+            sent = await safe_send_message(
                 doctor_tid,
                 vet_message,
                 parse_mode="HTML",
                 reply_markup=get_start_consultation_keyboard(uid, consultation_id),
             )
+            if sent is not None:
+                notified_doctors.add(doctor_tid)
+    if not notified_doctors:
+        for row in await get_all_doctors():
+            doctor_tid = row[0]
+            sent = await safe_send_message(
+                doctor_tid,
+                vet_message,
+                parse_mode="HTML",
+                reply_markup=get_start_consultation_keyboard(uid, consultation_id),
+            )
+            if sent is not None:
+                notified_doctors.add(doctor_tid)
     
     queue_position = await add_to_queue("all", uid, anonymous_id)
-    
-    await safe_send_message(
-        uid,
-        "✅ Информация о питомце передана врачу!\n\n"
-        f"Вы добавлены в очередь. Позиция: {queue_position}.\n"
-        "Врач скоро свяжется с вами.",
-        reply_markup=ReplyKeyboardRemove()
-    )
+
+    if not notified_doctors:
+        await safe_send_message(
+            uid,
+            "⚠️ Не удалось отправить анкету врачам (нет доставки в Telegram). "
+            "Напишите в «🆘 Помощь» — администратор поможет.\n\n"
+            f"Вы в общей очереди, позиция: {queue_position}.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    else:
+        await safe_send_message(
+            uid,
+            "✅ Информация о питомце передана врачу!\n\n"
+            f"Вы добавлены в очередь. Позиция: {queue_position}.\n"
+            "Врач скоро свяжется с вами.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
     
     await state.clear()
 
