@@ -34,3 +34,6 @@ class AdminState(StatesGroup):
     waiting_user_id = State()      # Ожидание ID пользователя
     waiting_doctor_id = State()    # Ожидание ID врача
     waiting_ban_reason = State()   # Причина блокировки
+    add_doctor_telegram = State()   # Шаг 1: Telegram ID нового врача
+    add_doctor_name = State()       # Шаг 2: ФИО
+    add_doctor_pick_spec = State()  # Шаг 3: выбор специализации (callback)

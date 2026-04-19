@@ -1,5 +1,7 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
+from data.problems import SPECIALISTS, SPECIALIZATION_KEYS
+
 def get_admin_main_keyboard():
     """Главная панель администратора"""
     return ReplyKeyboardMarkup(
@@ -58,4 +60,21 @@ def get_support_queue_keyboard(
                 )
             ]
         )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_add_doctor_spec_keyboard() -> InlineKeyboardMarkup:
+    """Инлайн-выбор специализации при добавлении врача (3 кнопки в ряд)."""
+    specs = [(k, SPECIALISTS[k]) for k in SPECIALIZATION_KEYS if k in SPECIALISTS]
+    rows: list = []
+    row: list = []
+    for _key, title in specs:
+        short = title if len(title) <= 20 else title[:17] + "…"
+        row.append(InlineKeyboardButton(text=short, callback_data=f"admnspec:{_key}"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="admnspec_cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from html import escape
@@ -16,14 +16,15 @@ from database.doctors import add_doctor, remove_doctor, get_all_doctors, DOCTOR_
 from database.queue import get_queue_length, clear_queue
 from database.db import get_db
 from utils.helpers import safe_send_message
-from keyboards.admin import get_support_queue_keyboard
+from keyboards.admin import get_support_queue_keyboard, get_add_doctor_spec_keyboard
+from data.problems import SPECIALISTS, SPECIALIZATION_KEYS
 from database.support import (
     add_support_message,
     close_support_request,
     get_open_request,
     list_open_requests,
 )
-from states.forms import WaitingState
+from states.forms import WaitingState, AdminState
 import redis
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
@@ -261,13 +262,148 @@ async def add_doctor_command(message: Message):
     name = args[2]
     specialization = args[3]
     
-    if specialization not in ["dentistry", "surgery", "therapy"]:
-        await safe_send_message(user_id, "❌ Неверная специализация. Доступны: dentistry, surgery, therapy")
+    valid = ", ".join(SPECIALIZATION_KEYS)
+    if specialization not in SPECIALIZATION_KEYS:
+        await safe_send_message(user_id, f"❌ Неверная специализация. Доступны:\n<code>{valid}</code>", parse_mode="HTML")
         return
-    
+
     await add_doctor(telegram_id, name, specialization)
-    await safe_send_message(user_id, f"✅ Врач {name} добавлен!")
+    spec_label = SPECIALISTS.get(specialization, specialization)
+    await safe_send_message(
+        user_id,
+        f"✅ Врач <b>{escape(name)}</b> ({spec_label}) добавлен!",
+        parse_mode="HTML",
+    )
     await safe_send_message(telegram_id, "👨‍⚕️ Вы добавлены в систему как врач!\nИспользуйте /start для панели управления.")
+
+
+@router.message(F.text == "➕ Добавить врача")
+async def add_doctor_wizard_start(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    await state.set_state(AdminState.add_doctor_telegram)
+    await safe_send_message(
+        user_id,
+        "📝 <b>Введите Telegram ID врача:</b>\n\n"
+        "Целое число ( можно узнать у врача или через @userinfobot )",
+        parse_mode="HTML",
+    )
+
+
+@router.message(
+    StateFilter(
+        AdminState.add_doctor_telegram,
+        AdminState.add_doctor_name,
+        AdminState.add_doctor_pick_spec,
+    ),
+    Command("cancel"),
+)
+async def add_doctor_wizard_cancel_cmd(message: Message, state: FSMContext):
+    if not await user_in_admin_context(message.from_user.id):
+        return
+    await state.clear()
+    await safe_send_message(message.from_user.id, "❌ Добавление врача отменено.")
+
+
+@router.message(AdminState.add_doctor_telegram)
+async def add_doctor_wizard_id(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    raw = (message.text or "").strip()
+    if not raw.lstrip("-").isdigit():
+        await safe_send_message(user_id, "⚠️ Отправьте только числовой Telegram ID или /cancel")
+        return
+    tid = int(raw)
+    if tid <= 0:
+        await safe_send_message(user_id, "⚠️ Некорректный ID")
+        return
+    await state.update_data(new_doctor_tid=tid)
+    await state.set_state(AdminState.add_doctor_name)
+    await safe_send_message(
+        user_id,
+        "📝 <b>Введите имя и фамилию врача:</b>\n\n"
+        "Пример: <code>Иванов Иван</code>",
+        parse_mode="HTML",
+    )
+
+
+@router.message(AdminState.add_doctor_name)
+async def add_doctor_wizard_name(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    name = (message.text or "").strip()
+    if len(name) < 3:
+        await safe_send_message(user_id, "⚠️ Введите не короче 3 символов или /cancel")
+        return
+    await state.update_data(new_doctor_name=name)
+    await state.set_state(AdminState.add_doctor_pick_spec)
+    await safe_send_message(
+        user_id,
+        "🏥 <b>Выберите специализацию врача:</b>",
+        reply_markup=get_add_doctor_spec_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(StateFilter(AdminState.add_doctor_pick_spec), F.data.startswith("admnspec:"))
+async def add_doctor_wizard_spec(call: CallbackQuery, state: FSMContext):
+    admin_id = call.from_user.id
+    if not await user_in_admin_context(admin_id):
+        await call.answer("⛔", show_alert=True)
+        return
+    spec_key = call.data.split(":", 1)[1]
+    if spec_key not in SPECIALISTS:
+        await call.answer("Неверная специализация", show_alert=True)
+        return
+    data = await state.get_data()
+    tid = data.get("new_doctor_tid")
+    name = data.get("new_doctor_name")
+    if not tid or not name:
+        await state.clear()
+        await call.answer("Сессия сброшена, начните снова", show_alert=True)
+        return
+    await add_doctor(tid, name, spec_key)
+    await state.clear()
+    spec_label = SPECIALISTS[spec_key]
+    try:
+        await call.message.edit_text(
+            f"✅ Врач <b>{escape(name)}</b> ({spec_label}) добавлен!",
+            parse_mode="HTML",
+        )
+    except Exception:
+        await safe_send_message(
+            admin_id,
+            f"✅ Врач <b>{escape(name)}</b> ({spec_label}) добавлен!",
+            parse_mode="HTML",
+        )
+    await call.answer()
+    await safe_send_message(
+        tid,
+        "👨‍⚕️ Вы добавлены в систему как врач!\nИспользуйте /start для панели управления.",
+    )
+
+
+@router.callback_query(StateFilter(AdminState.add_doctor_pick_spec), F.data == "admnspec_cancel")
+async def add_doctor_wizard_cancel_cb(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.answer("Отменено")
+    try:
+        await call.message.edit_text("❌ Добавление врача отменено.")
+    except Exception:
+        pass
+
+
+@router.message(AdminState.add_doctor_pick_spec)
+async def add_doctor_wizard_remind_inline(message: Message):
+    if not await user_in_admin_context(message.from_user.id):
+        return
+    await safe_send_message(
+        message.from_user.id,
+        "Выберите специализацию кнопкой выше или отправьте /cancel.",
+    )
 
 
 @router.message(Command("removedoctor"))

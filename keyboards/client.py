@@ -7,7 +7,12 @@ def get_main_keyboard():
     buttons = []
     for cat_key, cat_data in CATEGORIES.items():
         buttons.append([KeyboardButton(text=f"{cat_data['emoji']} {cat_data['name']}")])
-    buttons.append([KeyboardButton(text="📋 Мои консультации")])
+    buttons.append(
+        [
+            KeyboardButton(text="📋 Наши врачи"),
+            KeyboardButton(text="📋 Мои консультации"),
+        ]
+    )
     buttons.append([KeyboardButton(text="🆘 Помощь")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -97,3 +102,46 @@ def get_waiting_keyboard():
         [InlineKeyboardButton(text="✅ Да, я готов ждать", callback_data="wait_accept")],
         [InlineKeyboardButton(text="🔙 Выбрать другую проблему", callback_data="back_to_main")]
     ])
+
+
+def get_our_doctors_inline_keyboard(lines: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """lines: (telegram_id, текст на кнопке)"""
+    rows = []
+    for tid, label in lines:
+        short = label if len(label) <= 58 else label[:55] + "…"
+        rows.append([InlineKeyboardButton(text=short, callback_data=f"docsel:{tid}")])
+    rows.append([InlineKeyboardButton(text="🔙 Главное меню", callback_data="doclist_close")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_doctor_free_pay_keyboard(doctor_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💰 Оплатить консультацию",
+                    callback_data=f"pay_direct:{doctor_id}",
+                )
+            ],
+            [InlineKeyboardButton(text="🔙 К списку врачей", callback_data="doclist_reopen")],
+        ]
+    )
+
+
+def get_doctor_busy_keyboard(doctor_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⏳ Ждать", callback_data=f"docbusy_wait:{doctor_id}")],
+            [InlineKeyboardButton(text="🔄 Выбрать другого", callback_data="doclist_reopen")],
+            [InlineKeyboardButton(text="📋 Общая очередь", callback_data="docbusy_queue")],
+        ]
+    )
+
+
+def get_doctor_offline_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Выбрать другого", callback_data="doclist_reopen")],
+            [InlineKeyboardButton(text="📋 Общая очередь", callback_data="docbusy_queue")],
+        ]
+    )

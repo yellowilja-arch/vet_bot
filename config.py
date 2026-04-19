@@ -47,52 +47,41 @@ INACTIVITY_CLIENT_SECONDS = 360   # 6 минут
 MAX_ACTIVE_PER_DOCTOR = 3
 
 # ============================================
-# СПЕЦИАЛИЗАЦИИ И ВРАЧИ
+# СПЕЦИАЛИЗАЦИИ (канон — data/problems.py)
 # ============================================
 
-# Специализации (для отображения пользователю)
-SPECIALISTS = {
-    "gp": "Врач общей практики",
-    "therapist": "Терапевт",
-    "surgeon": "Хирург",
-    "orthopedist": "Ортопед-травматолог",
-    "neurologist": "Невролог",
-    "gastroenterologist": "Гастроэнтеролог",
-    "nephrologist": "Нефролог",
-    "oncologist": "Онколог",
-    "dermatologist": "Дерматолог",
-    "virologist": "Вирусолог",
-    "cardiologist": "Кардиолог",
-    "ophthalmologist": "Офтальмолог",
-    "reproductologist": "Репродуктолог",
-    "radiologist": "Врач визуальной диагностики",
-}
+from data.problems import SPECIALISTS, SPECIALIZATION_KEYS  # noqa: E402
 
-# Врачи по специализациям (Telegram ID → специализация)
-# ВНИМАНИЕ: Замените ID на реальные Telegram ID врачей!
+# Врачи по специализациям (Telegram ID) — дублирует БД для маршрутизации; обновляется из БД при load_doctors
 DOCTORS = {
-    "gp": [1092230808],                    # Врачи общей практики (пока ты)
-    "therapist": [1906114179],             # Терапевты
-    "surgeon": [222222222],                # Хирурги
-    "orthopedist": [333333333],            # Ортопеды-травматологи
-    "neurologist": [444444444],            # Неврологи
-    "gastroenterologist": [555555555],     # Гастроэнтерологи
-    "nephrologist": [666666666],           # Нефрологи
-    "oncologist": [777777777],             # Онкологи
-    "dermatologist": [888888888],          # Дерматологи
-    "virologist": [999999999],             # Вирусологи
-    "cardiologist": [101010101],           # Кардиологи
-    "ophthalmologist": [111111111],        # Офтальмологи
-    "reproductologist": [121212121],       # Репродуктологи
-    "radiologist": [131313131],            # Врачи визуальной диагностики
+    "therapist": [1906114179],
+    "oncologist": [201000001],
+    "cardiologist": [201000002],
+    "gastroenterologist": [201000003],
+    "orthopedist": [201000004],
+    "surgeon": [1092230808],
+    "nephrologist": [201000005],
+    "neurologist": [201000006],
+    "dermatologist": [201000007],
+    "reproductologist": [201000008],
+    "virologist": [201000009],
+    "radiologist": [201000010],
 }
 
-# Начальные врачи (для инициализации БД)
-# Здесь только те, у кого есть реальные ID
+# Начальные врачи (инициализация БД). Замените ID на боевые.
 INITIAL_DOCTORS = {
-    "gp": [{"id": 1092230808, "name": "Корнев Михаил"}],
     "therapist": [{"id": 1906114179, "name": "Васильева Елена"}],
-    "surgeon": [{"id": 222222222, "name": "Сидоров Алексей"}],
+    "oncologist": [{"id": 201000001, "name": "Петров Иван"}],
+    "cardiologist": [{"id": 201000002, "name": "Сидорова Мария"}],
+    "gastroenterologist": [{"id": 201000003, "name": "Кузнецов Алексей"}],
+    "orthopedist": [{"id": 201000004, "name": "Соколов Дмитрий"}],
+    "surgeon": [{"id": 1092230808, "name": "Корнев Михаил"}],
+    "nephrologist": [{"id": 201000005, "name": "Павлова Ольга"}],
+    "neurologist": [{"id": 201000006, "name": "Новиков Андрей"}],
+    "dermatologist": [{"id": 201000007, "name": "Морозова Екатерина"}],
+    "reproductologist": [{"id": 201000008, "name": "Волков Сергей"}],
+    "virologist": [{"id": 201000009, "name": "Зайцева Анна"}],
+    "radiologist": [{"id": 201000010, "name": "Соловьев Илья"}],
 }
 
 # Глобальный список ID врачей (заполняется при загрузке)
