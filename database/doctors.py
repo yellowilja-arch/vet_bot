@@ -5,6 +5,9 @@ from database.db import get_db
 r = redis.from_url(REDIS_URL, decode_responses=True)
 DOCTOR_IDS = []
 
+# Клиентский список «Наши врачи» и темы меню: ID ниже порога считаем тестовыми заглушками
+REAL_TELEGRAM_USER_ID_MIN = 1_000_000_000
+
 async def load_doctors_from_db():
     """Загружает врачей из БД в память и Redis"""
     global DOCTOR_IDS
@@ -67,11 +70,37 @@ async def get_all_doctors():
     return await cursor.fetchall()
 
 
-async def list_distinct_specializations_active() -> list[str]:
-    """Все специализации, по которым есть активные врачи."""
+async def get_public_doctors_for_client():
+    """
+    Активные врачи для клиента: is_active и реальный Telegram ID (без заглушек из тестовой БД).
+    """
+    rows = await get_all_doctors()
+    filtered = [r for r in rows if r[0] >= REAL_TELEGRAM_USER_ID_MIN]
+    return sorted(filtered, key=lambda r: (r[2], r[1]))
+
+
+async def is_active_public_doctor(telegram_id: int) -> bool:
+    """Врач есть в публичном списке (активен и не заглушка по ID)."""
+    if telegram_id < REAL_TELEGRAM_USER_ID_MIN:
+        return False
     db = await get_db()
     cursor = await db.execute(
-        "SELECT DISTINCT specialization FROM doctors WHERE is_active = 1 ORDER BY specialization",
+        "SELECT 1 FROM doctors WHERE telegram_id = ? AND is_active = 1",
+        (telegram_id,),
+    )
+    return await cursor.fetchone() is not None
+
+
+async def list_distinct_specializations_active() -> list[str]:
+    """Специализации с хотя бы одним активным «реальным» врачём (для тем в меню)."""
+    db = await get_db()
+    cursor = await db.execute(
+        """
+        SELECT DISTINCT specialization FROM doctors
+        WHERE is_active = 1 AND telegram_id >= ?
+        ORDER BY specialization
+        """,
+        (REAL_TELEGRAM_USER_ID_MIN,),
     )
     return [row[0] for row in await cursor.fetchall()]
 
@@ -88,8 +117,11 @@ async def topic_keys_available_for_client_menu() -> list[str]:
     db = await get_db()
     for spec in specs:
         cur = await db.execute(
-            "SELECT telegram_id FROM doctors WHERE is_active = 1 AND specialization = ?",
-            (spec,),
+            """
+            SELECT telegram_id FROM doctors
+            WHERE is_active = 1 AND specialization = ? AND telegram_id >= ?
+            """,
+            (spec, REAL_TELEGRAM_USER_ID_MIN),
         )
         for (tid,) in await cur.fetchall():
             if get_doctor_status(tid) == "online":
