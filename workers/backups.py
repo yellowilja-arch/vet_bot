@@ -5,6 +5,7 @@ from datetime import datetime
 import boto3
 from botocore.client import Config
 from config import YC_ACCESS_KEY_ID, YC_SECRET_ACCESS_KEY, YC_BUCKET_NAME, YC_ENDPOINT, DB_PATH, ADMIN_IDS
+from database.db import checkpoint_wal_for_backup
 from utils.helpers import safe_send_message
 
 def upload_to_yandex(file_path: str, object_name: str) -> bool:
@@ -66,6 +67,7 @@ async def clean_old_backups(max_files: int = 30):
 async def create_backup():
     """Создаёт и загружает бэкап БД в Yandex Cloud"""
     try:
+        await checkpoint_wal_for_backup()
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         backup_name = f"vet_bot_backup_{timestamp}.db"
         temp_path = f"/tmp/{backup_name}"
@@ -88,6 +90,7 @@ async def backup_worker():
     while True:
         await asyncio.sleep(86400)  # 24 часа
         try:
+            await checkpoint_wal_for_backup()
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             backup_name = f"vet_bot_backup_{timestamp}.db"
             temp_path = f"/tmp/{backup_name}"
