@@ -50,22 +50,23 @@ async def admin_clear_queue(message: Message):
     user_id = message.from_user.id
     if not await user_in_admin_context(user_id):
         return
-    affected, notify_ids = await clear_queue("all")
+    affected, notify_ids, n_active_closed = await clear_queue("all")
     for uid in notify_ids:
         try:
             await safe_send_message(
                 uid,
-                "ℹ️ Общая очередь была очищена администратором.\n"
-                "Предварительное закрепление за врачом снято. "
-                "Если оплата уже прошла — откройте нужную тему снова или напишите в «🆘 Помощь».",
+                "ℹ️ Администратор выполнил сброс очереди и ожидающих заявок.\n\n"
+                "• Если у вас была открытая консультация с врачом — она завершена.\n"
+                "• Предварительное закрепление за врачом по оплате снято.\n\n"
+                "При необходимости начните заново из меню или напишите в «🆘 Помощь».",
             )
         except Exception as e:
             logging.warning("clearqueue: не удалось уведомить клиента %s: %s", uid, e)
     await safe_send_message(
         user_id,
-        "✅ Очередь очищена; у ожидающих консультаций (статусы оплаты / ожидание оплаты) без активного "
-        f"диалога снято предназначение врача (в т.ч. если клиент не был в таблице очереди). "
-        f"Затронуто клиентов: {len(affected)}. Уведомлений: {len(notify_ids)}.",
+        "✅ Сброс выполнен. Принудительно закрыто активных консультаций: "
+        f"{n_active_closed}. Клиентов с очищенным ожиданием/очередью: {len(affected)}. "
+        f"Уведомлений клиентам: {len(notify_ids)}.",
     )
 
 
