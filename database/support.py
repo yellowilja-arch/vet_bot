@@ -131,6 +131,45 @@ async def format_user_history(user_id: int, limit: int = 30) -> str:
     return "\n\n".join(lines)
 
 
+async def ensure_active_support_ticket_for_client(client_id: int) -> int | None:
+    """
+    Актуальное открытое обращение для переписки: Redis, иначе последнее open в БД (после рестарта).
+    """
+    from services.support_session import (
+        clear_active_support_ticket,
+        get_active_support_ticket,
+        set_active_support_ticket,
+    )
+
+    rid = get_active_support_ticket(client_id)
+    if rid:
+        if await get_open_request(rid):
+            return rid
+        clear_active_support_ticket(client_id)
+
+    rid2 = await get_latest_open_ticket_for_user(client_id)
+    if rid2 and await get_open_request(rid2):
+        set_active_support_ticket(client_id, rid2)
+        return rid2
+    return None
+
+
+async def get_latest_open_ticket_for_user(user_id: int) -> int | None:
+    """Самое новое открытое обращение пользователя (для ответов после перезапуска Redis)."""
+    db = await get_db()
+    cur = await db.execute(
+        """
+        SELECT id FROM support_requests
+        WHERE user_id = ? AND status = 'open'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (user_id,),
+    )
+    row = await cur.fetchone()
+    return int(row[0]) if row else None
+
+
 async def count_open_for_user(user_id: int) -> int:
     db = await get_db()
     cur = await db.execute(
