@@ -46,31 +46,31 @@ def get_main_keyboard(topic_button_labels: list[str]) -> ReplyKeyboardMarkup:
 
 
 
-def get_topic_pay_keyboard(spec_key: str) -> InlineKeyboardMarkup:
+def get_topic_pay_keyboard(spec_key: str, *, include_tbank: bool = False) -> InlineKeyboardMarkup:
 
     """Оплата выбранной темы (spec_key — ключ специализации из БД)."""
 
-    return InlineKeyboardMarkup(
-
-        inline_keyboard=[
-
+    rows: list[list[InlineKeyboardButton]] = []
+    if include_tbank:
+        rows.append(
             [
-
                 InlineKeyboardButton(
-
-                    text="💰 Оплатить консультацию",
-
-                    callback_data=f"pay_topic:{spec_key}",
-
+                    text="💳 Онлайн (Т-Банк)",
+                    callback_data=f"pay_tbank:{spec_key}",
                 )
-
-            ],
-
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_topics")],
-
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="💰 Оплатить консультацию",
+                callback_data=f"pay_topic:{spec_key}",
+            )
         ]
-
     )
+    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_topics")])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 
@@ -237,7 +237,30 @@ def get_recent_illness_keyboard():
     )
 
 
+def get_vaccination_keyboard() -> InlineKeyboardMarkup:
+    """Комплексная вакцинация — Да / Нет / Не знаю."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да, проведена", callback_data="vac:yes"),
+                InlineKeyboardButton(text="❌ Нет, не проведена", callback_data="vac:no"),
+                InlineKeyboardButton(text="❓ Не знаю", callback_data="vac:unk"),
+            ],
+        ]
+    )
 
+
+def get_sterilization_keyboard() -> InlineKeyboardMarkup:
+    """Кастрация / стерилизация — Да / Нет / Не знаю."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да, проведена", callback_data="ster:yes"),
+                InlineKeyboardButton(text="❌ Нет, не проведена", callback_data="ster:no"),
+                InlineKeyboardButton(text="❓ Не знаю", callback_data="ster:unk"),
+            ],
+        ]
+    )
 
 
 def get_support_keyboard():
