@@ -84,11 +84,17 @@ DB_PATH = _resolve_sqlite_path()
 #   DOCTORS_SYNC_PUSH_METHOD=PUT
 #   DOCTORS_SYNC_HTTP_HEADERS={"X-Master-Key":"<ваш ключ>"}
 #
+# Проще для jsonbin: один ключ без JSON (если HTTP_HEADERS кривой или пустой):
+#   DOCTORS_SYNC_JSONBIN_MASTER_KEY=<ваш X-Master-Key>
+#
 # Ответ GET может быть массивом или обёрткой {"record":[...]} / {"doctors":[...]}.
 DOCTORS_SYNC_PULL_URL = (os.getenv("DOCTORS_SYNC_PULL_URL") or "").strip()
 DOCTORS_SYNC_PUSH_URL = (os.getenv("DOCTORS_SYNC_PUSH_URL") or "").strip()
 DOCTORS_SYNC_HTTP_HEADERS = (os.getenv("DOCTORS_SYNC_HTTP_HEADERS") or "").strip()
 DOCTORS_SYNC_PUSH_METHOD = (os.getenv("DOCTORS_SYNC_PUSH_METHOD") or "PUT").strip().upper()
+DOCTORS_SYNC_JSONBIN_MASTER_KEY = (
+    os.getenv("DOCTORS_SYNC_JSONBIN_MASTER_KEY") or os.getenv("JSONBIN_MASTER_KEY") or ""
+).strip()
 
 # ============================================
 # НАСТРОЙКИ ТАЙМАУТОВ
