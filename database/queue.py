@@ -232,7 +232,7 @@ async def clear_queue(topic: str) -> tuple[list[int], list[int], int]:
                 """
                 SELECT DISTINCT c.client_id FROM consultations c
                 WHERE c.doctor_id IS NOT NULL
-                  AND c.status IN ('paid', 'waiting_payment')
+                  AND c.status IN ('paid', 'waiting_payment', 'waiting_doctor_offline')
                   AND NOT EXISTS (
                       SELECT 1 FROM consultations x
                       WHERE x.client_id = c.client_id AND x.status = 'active'
@@ -263,7 +263,7 @@ async def clear_queue(topic: str) -> tuple[list[int], list[int], int]:
                 UPDATE consultations
                 SET doctor_id = NULL, doctor_name = NULL, doctor_specialization = NULL
                 WHERE doctor_id IS NOT NULL
-                  AND status IN ('paid', 'waiting_payment')
+                  AND status IN ('paid', 'waiting_payment', 'waiting_doctor_offline')
                   AND client_id IN ({ph})
                 """,
                 reset_ids,

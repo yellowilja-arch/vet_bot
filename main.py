@@ -12,6 +12,7 @@ from handlers import register_handlers
 from services.bot_commands import default_scope_commands
 from workers.backups import backup_worker
 from workers.inactivity import inactivity_worker
+from workers.doctor_reminders import doctor_reminder_worker
 from utils.helpers import safe_send_message
 from database.db import get_db
 import logging
@@ -85,6 +86,7 @@ async def main():
     # Запуск фоновых задач
     asyncio.create_task(backup_worker())
     asyncio.create_task(inactivity_worker())
+    asyncio.create_task(doctor_reminder_worker())
     
     # Graceful shutdown
     def signal_handler(signum, frame):

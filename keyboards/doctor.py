@@ -28,6 +28,14 @@ def get_start_consultation_keyboard(client_user_id: int, consultation_id: int):
     ])
 
 
+def get_doctor_unanswered_reminder_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Посмотреть консультации", callback_data="doc_unanswered_list")]
+        ]
+    )
+
+
 def get_doctor_status_keyboard(has_active_client: bool = False):
     """Клавиатура для просмотра статуса"""
     buttons = [[InlineKeyboardButton(text="📋 Очередь", callback_data="view_queue")]]

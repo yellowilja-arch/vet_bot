@@ -13,7 +13,13 @@ from services.validators import (
 )
 from services.reset_tools import reset_user_state, reset_all_states, close_stuck_requests, unlock_all_doctors
 from database.users import get_user_info, get_recent_users
-from database.doctors import add_doctor, remove_doctor, get_all_doctors, DOCTOR_IDS
+from database.doctors import (
+    add_doctor,
+    remove_doctor,
+    get_all_doctors,
+    DOCTOR_IDS,
+    specialization_display_label,
+)
 from database.queue import get_queue_length, clear_queue
 from database.db import get_db, checkpoint_wal_for_backup
 from utils.helpers import safe_send_message, split_text_chunks
@@ -84,6 +90,23 @@ def _role_label(uid: int, admin_ids: set[int], doctor_ids: set[int]) -> str:
     return "Клиент"
 
 
+def _stats_name_title(s: str) -> str:
+    """Фамилия имя: каждое слово с заглавной буквы."""
+    return " ".join(
+        (w[:1].upper() + w[1:].lower()) if w else "" for w in s.split()
+    ).strip()
+
+
+def _stats_spec_sentence_case(s: str) -> str:
+    """Специализация: с заглавной только первое слово, остальные — строчные."""
+    parts = s.split()
+    if not parts:
+        return s
+    first = parts[0][:1].upper() + parts[0][1:].lower()
+    rest = [p.lower() for p in parts[1:]]
+    return " ".join([first, *rest])
+
+
 async def _reply_admin_stats(user_id: int) -> None:
     db = await get_db()
     cursor = await db.execute("SELECT COUNT(*) FROM users")
@@ -146,13 +169,25 @@ async def _reply_admin_stats(user_id: int) -> None:
             f"Всего: {cons_total} | Активных: {active} | Завершённых: {completed}",
             "",
             "━━━━━━━━━━━━━━━━━━━━━━",
-            "👨‍⚕️ <b>ВРАЧИ</b>",
         ]
     )
-    online = sum(1 for did in doctor_ids if get_doctor_status(did) == "online")
-    offline = len(doctor_ids) - online
-    lines.append(f"Всего в системе: {len(doctor_ids)}")
-    lines.append(f"Онлайн: {online} | Офлайн: {offline}")
+
+    cursor = await db.execute(
+        """
+        SELECT name, specialization
+        FROM doctors
+        ORDER BY name COLLATE NOCASE ASC, id ASC
+        """
+    )
+    all_doctor_rows = await cursor.fetchall()
+    n_docs = len(all_doctor_rows)
+    lines.append(f"👨‍⚕️ <b>ВРАЧИ В СИСТЕМЕ ({n_docs})</b>")
+    lines.append("")
+    for dname, spec_key in all_doctor_rows:
+        spec_lbl = specialization_display_label(spec_key)
+        nm = _stats_name_title(str(dname or "—").strip())
+        sp = _stats_spec_sentence_case(spec_lbl.strip())
+        lines.append(escape(f"{nm} {sp}".strip()))
 
     text = "\n".join(lines)
     for chunk in split_text_chunks(text, max_len=3900):

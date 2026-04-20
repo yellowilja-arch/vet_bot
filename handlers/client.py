@@ -41,6 +41,8 @@ from database.consultations import (
     assign_pending_doctor_from_topic,
     assign_pending_doctor_direct,
     get_consultation_doctor_and_topic,
+    set_consultation_offline_intake,
+    finalize_questionnaire_sla,
 )
 from database.payments import save_payment
 from database.users import save_user_if_new
@@ -433,8 +435,10 @@ async def our_doctor_selected(call: CallbackQuery, state: FSMContext):
     else:
         await call.message.edit_text(
             f"⚪ Врач <b>{escape(name)}</b> сейчас не в сети.\n\n"
-            f"Пожалуйста, выберите другого врача или выберите тему в главном меню.",
-            reply_markup=get_doctor_offline_keyboard(),
+            f"Вы можете оплатить консультацию сейчас — ответ гарантирован в течение <b>24 часов</b> "
+            f"после подтверждения оплаты.\n\n"
+            f"Или выберите другого врача / тему в главном меню.",
+            reply_markup=get_doctor_offline_keyboard(tid),
             parse_mode="HTML",
         )
     await call.answer()
@@ -479,6 +483,52 @@ async def doc_busy_queue_hint(call: CallbackQuery):
         "Нажмите /start и выберите тему консультации — вас закрепят за врачом этого направления.",
         parse_mode="HTML",
     )
+
+
+@router.callback_query(F.data.startswith("pay_direct_offline:"))
+async def pay_direct_doctor_offline(call: CallbackQuery, state: FSMContext):
+    """Оплата записи к врачу, который сейчас офлайн (полный цикл, ответ до 24 ч)."""
+    user_id = call.from_user.id
+    if not await user_in_client_context(user_id):
+        await call.answer("⛔", show_alert=True)
+        return
+    try:
+        tid = int(call.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await call.answer("Ошибка", show_alert=True)
+        return
+    if not await is_active_public_doctor(tid):
+        await call.answer("Врач недоступен", show_alert=True)
+        return
+
+    prob_data = PROBLEMS["direct_booking"]
+    dname = await get_doctor_name(tid)
+    await state.update_data(
+        problem_key="direct_booking",
+        selected_problem="direct_booking",
+        problem_price=prob_data["price"],
+        direct_doctor_id=tid,
+        offline_doctor_booking=True,
+        problem_name=f"Консультация: {dname}",
+    )
+    await call.message.edit_text(
+        f"💰 <b>Оплата консультации</b>\n\n"
+        f"Врач: <b>{escape(dname)}</b> (сейчас не в сети)\n"
+        f"📅 Ответ в течение 24 часов после подтверждения оплаты.\n\n"
+        f"Услуга: запись к выбранному специалисту\n"
+        f"Сумма: {prob_data['price']} ₽\n\n"
+        f"📞 Оплата по номеру телефона (СБП):\n"
+        f"<code>{PHONE_NUMBER}</code>\n\n"
+        f"✅ После оплаты нажмите кнопку ниже и отправьте чек.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid_confirm")],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_payment")],
+            ]
+        ),
+        parse_mode="HTML",
+    )
+    await call.answer()
 
 
 @router.callback_query(F.data.startswith("pay_direct:"))
@@ -643,6 +693,9 @@ async def handle_receipt(message: Message, state: FSMContext):
         direct_tid = data.get("direct_doctor_id")
         notified = False
 
+        if data.get("offline_doctor_booking"):
+            await set_consultation_offline_intake(consultation_id)
+
         if direct_tid:
             tid = int(direct_tid)
             await assign_pending_doctor_direct(consultation_id, tid)
@@ -778,7 +831,7 @@ async def process_weight(message: Message, state: FSMContext):
     await safe_send_message(
         message.from_user.id,
         "🐕 Укажите породу питомца:\n\n"
-        "Например: <b>Мейн-кун</b> или <b>Дворняга</b>",
+        "Например: <b>Мейн-кун</b> или <b>Бигль</b>",
         parse_mode="HTML"
     )
 
@@ -990,6 +1043,14 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     ))
     await db.commit()
 
+    cur_off = await db.execute(
+        "SELECT COALESCE(offline_intake, 0) FROM consultations WHERE id = ?",
+        (consultation_id,),
+    )
+    off_row = await cur_off.fetchone()
+    offline_intake = bool(off_row and off_row[0])
+    await finalize_questionnaire_sla(consultation_id, offline_intake=offline_intake)
+
     uid = _client_telegram_id(message)
     
     prob_title = escape(str(data.get("problem_name", "Не указана")))
@@ -1074,12 +1135,30 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
             reply_markup=ReplyKeyboardRemove(),
         )
     else:
-        await safe_send_message(
-            uid,
-            "✅ Информация о питомце передана назначенному врачу!\n"
-            "Он получит анкету и сможет начать консультацию.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        if offline_intake:
+            cur_nm = await db.execute(
+                "SELECT doctor_name FROM consultations WHERE id = ?",
+                (consultation_id,),
+            )
+            dnr = await cur_nm.fetchone()
+            dname_esc = escape(str(dnr[0] if dnr and dnr[0] else "врач"))
+            await safe_send_message(
+                uid,
+                "✅ <b>Оплата подтверждена! Анкета заполнена.</b>\n\n"
+                f"⚠️ Врач <b>{dname_esc}</b> сейчас не в сети, но ваш вопрос принят.\n\n"
+                "📅 Ответ придёт в течение 24 часов.\n"
+                f"🆔 Номер консультации: <b>#{consultation_id}</b>\n\n"
+                "Вы получите уведомление, когда врач начнёт консультацию.",
+                parse_mode="HTML",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+        else:
+            await safe_send_message(
+                uid,
+                "✅ Информация о питомце передана назначенному врачу!\n"
+                "Он получит анкету и сможет начать консультацию.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
     
     await state.clear()
 

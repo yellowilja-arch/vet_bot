@@ -201,3 +201,149 @@ async def get_consultations_by_doctor(doctor_id: int, limit: int = 20):
         LIMIT ?
     ''', (doctor_id, limit))
     return await cursor.fetchall()
+
+
+def build_consultation_question_summary(
+    problem_key: str | None,
+    pet_name: str | None,
+    species: str | None,
+    chronic: str | None,
+    recent_illness: str | None,
+) -> str:
+    from data.problems import SPECIALISTS
+
+    parts: list[str] = []
+    if problem_key and problem_key != "direct_booking":
+        parts.append(SPECIALISTS.get(problem_key, problem_key))
+    if pet_name or species:
+        parts.append(f"{pet_name or '—'} ({species or '—'})")
+    if chronic:
+        parts.append(f"хроника: {chronic}")
+    if recent_illness:
+        parts.append(f"за месяц: {recent_illness}")
+    return "; ".join(parts) if parts else "—"
+
+
+async def set_consultation_offline_intake(consultation_id: int) -> None:
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            "UPDATE consultations SET offline_intake = 1 WHERE id = ?",
+            (consultation_id,),
+        )
+        await db.commit()
+
+
+async def finalize_questionnaire_sla(consultation_id: int, *, offline_intake: bool) -> None:
+    """После анкеты: таймер ответа врача; офлайн-запись → статус waiting_doctor_offline."""
+    db = await get_db()
+    async with _db_lock:
+        if offline_intake:
+            await db.execute(
+                """
+                UPDATE consultations
+                SET status = 'waiting_doctor_offline',
+                    waiting_reply_since = COALESCE(waiting_reply_since, CURRENT_TIMESTAMP)
+                WHERE id = ?
+                """,
+                (consultation_id,),
+            )
+        else:
+            await db.execute(
+                """
+                UPDATE consultations
+                SET waiting_reply_since = COALESCE(waiting_reply_since, CURRENT_TIMESTAMP)
+                WHERE id = ?
+                """,
+                (consultation_id,),
+            )
+        await db.commit()
+
+
+async def list_unanswered_rows_for_doctor(doctor_telegram_id: int):
+    """Неотвеченные консультации одного врача (для кнопки «Посмотреть»)."""
+    db = await get_db()
+    cur = await db.execute(
+        """
+        SELECT
+            c.id,
+            c.client_id,
+            c.client_anonymous_id,
+            c.waiting_reply_since,
+            c.pet_name,
+            c.pet_species,
+            c.pet_chronic,
+            c.recent_illness,
+            c.problem_key,
+            c.status,
+            (strftime('%s', 'now') - strftime('%s', c.waiting_reply_since)) / 3600.0
+        FROM consultations c
+        WHERE c.doctor_id = ?
+          AND c.pet_name IS NOT NULL
+          AND c.waiting_reply_since IS NOT NULL
+          AND c.status IN ('paid', 'waiting_doctor_offline')
+        ORDER BY c.waiting_reply_since ASC
+        """,
+        (doctor_telegram_id,),
+    )
+    return await cur.fetchall()
+
+
+async def list_unanswered_detailed_for_reminders():
+    """Все оплаченные/офлайн-ожидание консультации с анкетой, без активного диалога."""
+    db = await get_db()
+    cur = await db.execute(
+        """
+        SELECT
+            c.id,
+            c.doctor_id,
+            c.client_id,
+            c.client_anonymous_id,
+            c.waiting_reply_since,
+            c.pet_name,
+            c.pet_species,
+            c.pet_chronic,
+            c.recent_illness,
+            c.problem_key,
+            c.status,
+            c.doctor_name,
+            (strftime('%s', 'now') - strftime('%s', c.waiting_reply_since)) / 3600.0
+        FROM consultations c
+        WHERE c.doctor_id IS NOT NULL
+          AND c.pet_name IS NOT NULL
+          AND c.waiting_reply_since IS NOT NULL
+          AND c.status IN ('paid', 'waiting_doctor_offline')
+        ORDER BY c.waiting_reply_since ASC
+        """
+    )
+    return await cur.fetchall()
+
+
+async def list_offline_pending_for_doctor(doctor_telegram_id: int):
+    db = await get_db()
+    cur = await db.execute(
+        """
+        SELECT id, client_id, client_anonymous_id, pet_name, pet_species, problem_key,
+               pet_chronic, recent_illness
+        FROM consultations
+        WHERE doctor_id = ?
+          AND status = 'waiting_doctor_offline'
+          AND pet_name IS NOT NULL
+        ORDER BY waiting_reply_since ASC
+        """,
+        (doctor_telegram_id,),
+    )
+    return await cur.fetchall()
+
+
+async def get_fsm_bootstrap_for_consultation(consultation_id: int):
+    """Данные для FSM клиента после подтверждения оплаты."""
+    db = await get_db()
+    cur = await db.execute(
+        """
+        SELECT client_anonymous_id, problem_key, doctor_id, doctor_name
+        FROM consultations WHERE id = ?
+        """,
+        (consultation_id,),
+    )
+    return await cur.fetchone()

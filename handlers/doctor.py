@@ -7,11 +7,11 @@ r = redis.from_url(REDIS_URL, decode_responses=True)
 from aiogram import Router, F
 from aiogram.filters import Command, BaseFilter
 from aiogram.enums import MessageEntityType
-from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
-from config import SPECIALISTS
+from config import SPECIALISTS, ADMIN_IDS
 from services.validators import (
     user_in_doctor_context,
     get_doctor_status,
@@ -38,6 +38,10 @@ from database.consultations import (
     save_consultation_end,
     get_consultation_doctor_and_topic,
     ensure_doctor_assigned_for_consultation,
+    get_fsm_bootstrap_for_consultation,
+    build_consultation_question_summary,
+    list_offline_pending_for_doctor,
+    list_unanswered_rows_for_doctor,
 )
 from database.payments import confirm_payment, get_pending_payment
 from database.doctors import (
@@ -54,6 +58,8 @@ from keyboards.doctor import (
     get_end_confirmation_keyboard,
     get_redirect_doctors_keyboard,
     get_redirect_confirm_keyboard,
+    get_start_consultation_keyboard,
+    get_doctor_unanswered_reminder_keyboard,
     DOCTORS_PAGE_SIZE,
 )
 from states.forms import QuestionnaireState
@@ -155,7 +161,22 @@ async def _run_confirm_payment_flow(doctor_id: int, client_id: int, state: FSMCo
         storage=state.storage,
         key=StorageKey(bot_id=bot_id, chat_id=client_id, user_id=client_id),
     )
-    await client_state.update_data(consultation_id=consultation_id, problem_name="Консультация")
+    boot = await get_fsm_bootstrap_for_consultation(consultation_id)
+    if not boot:
+        await safe_send_message(doctor_id, "❌ Не удалось прочитать консультацию из БД")
+        return False
+    anon, pk, did, dname = boot[0], boot[1], boot[2], boot[3]
+    problem_name = SPECIALISTS.get(pk, pk or "Консультация")
+    if pk == "direct_booking" and dname:
+        problem_name = f"Консультация: {dname}"
+    payload: dict = {
+        "consultation_id": consultation_id,
+        "problem_name": problem_name,
+        "anonymous_id": anon,
+    }
+    if pk == "direct_booking" and did is not None:
+        payload["direct_doctor_id"] = int(did)
+    await client_state.update_data(**payload)
     await client_state.set_state(QuestionnaireState.waiting_pet_name)
     await safe_send_message(
         client_id,
@@ -183,7 +204,7 @@ async def execute_take_client(
         (consultation_id,),
     )
     row = await cur.fetchone()
-    if not row or int(row[0]) != int(client_id) or row[1] != "paid":
+    if not row or int(row[0]) != int(client_id) or row[1] not in ("paid", "waiting_doctor_offline"):
         return False
     if queue_id is not None:
         await confirm_queue_processed(queue_id)
@@ -219,7 +240,44 @@ async def execute_take_client(
     from services.dialog_session import init_dialog_after_consultation_start
 
     init_dialog_after_consultation_start(int(client_id), int(doctor_id))
+    for k in (
+        f"head15sent:{consultation_id}",
+        f"head20sent:{consultation_id}",
+        f"head21h:{consultation_id}",
+    ):
+        r.delete(k)
     return True
+
+
+async def notify_doctor_offline_pending_on_login(doctor_id: int) -> None:
+    """При входе онлайн — напомнить об офлайн-заявках с готовой анкетой."""
+    rows = await list_offline_pending_for_doctor(doctor_id)
+    if not rows:
+        return
+    lines = [
+        "📬 <b>У вас есть консультации (врач был офлайн), клиенты ждут ответа:</b>\n",
+    ]
+    buttons: list[list] = []
+    for cid, cli, anon, pnm, pspec, pk, pch, rill in rows:
+        q = build_consultation_question_summary(pk, pnm, pspec, pch, rill)
+        lines.append(
+            f"🆔 <b>#{cid}</b> | {escape(str(anon))} | {escape(str(pnm or '—'))} ({escape(str(pspec or '—'))})\n"
+            f"📝 {escape(q[:200])}{'…' if len(q) > 200 else ''}\n"
+        )
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=f"▶️ Начать консультацию #{cid}",
+                    callback_data=f"take_cn:{cli}:{cid}",
+                )
+            ]
+        )
+    await safe_send_message(
+        doctor_id,
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None,
+    )
 
 
 def _not_a_bot_command(message: Message) -> bool:
@@ -250,6 +308,7 @@ async def go_online(message: Message):
     if await user_in_doctor_context(user_id):
         set_doctor_status(user_id, "online")
         await safe_send_message(user_id, "🟢 Вы онлайн", reply_markup=get_doctor_main_keyboard())
+        await notify_doctor_offline_pending_on_login(user_id)
 
 
 @router.message(Command("offline"))
@@ -280,8 +339,8 @@ async def show_status(message: Message):
 async def confirm_payment_command(message: Message, state: FSMContext):
     """Врач подтверждает оплату клиента"""
     doctor_id = message.from_user.id
-    if not await user_in_doctor_context(doctor_id):
-        await safe_send_message(doctor_id, "⛔ Только для врачей")
+    if not await user_in_doctor_context(doctor_id) and doctor_id not in ADMIN_IDS:
+        await safe_send_message(doctor_id, "⛔ Только для врачей или администраторов")
         return
     
     args = message.text.split()
@@ -301,8 +360,8 @@ async def confirm_payment_command(message: Message, state: FSMContext):
 @router.callback_query(lambda c: c.data and c.data.startswith("cfm_pay:"))
 async def confirm_payment_callback(call: CallbackQuery, state: FSMContext):
     doctor_id = call.from_user.id
-    if not await user_in_doctor_context(doctor_id):
-        await call.answer("⛔ Только для врачей", show_alert=True)
+    if not await user_in_doctor_context(doctor_id) and doctor_id not in ADMIN_IDS:
+        await call.answer("⛔ Только для врачей или администраторов", show_alert=True)
         return
     try:
         client_id = int(call.data.split(":", 1)[1])
@@ -374,6 +433,44 @@ async def doctor_next_callback(call: CallbackQuery):
         await call.answer("⛔", show_alert=True)
         return
     await run_next_from_queue(doctor_id)
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data == "doc_unanswered_list")
+async def doctor_unanswered_list_callback(call: CallbackQuery):
+    doctor_id = call.from_user.id
+    if not await user_in_doctor_context(doctor_id):
+        await call.answer("⛔", show_alert=True)
+        return
+    rows = await list_unanswered_rows_for_doctor(doctor_id)
+    if not rows:
+        await call.answer("Нет ожидающих консультаций", show_alert=True)
+        return
+    lines = ["📬 <b>ВАШИ НЕОТВЕЧЕННЫЕ КОНСУЛЬТАЦИИ</b>\n"]
+    buttons: list[list] = []
+    for i, row in enumerate(rows, start=1):
+        cid, cli, anon, _ws, pnm, pspec, pch, rill, pk, _st, hours = row
+        h = int(float(hours)) if hours is not None else 0
+        q = build_consultation_question_summary(pk, pnm, pspec, pch, rill)
+        lines.append(
+            f"{i}. 🆔 <b>#{cid}</b> | Клиент: {escape(str(anon))} | Ожидает: {h} ч.\n"
+            f"   🐾 Питомец: {escape(str(pnm or '—'))} ({escape(str(pspec or '—'))})\n"
+            f"   📝 Вопрос/проблема: {escape(q[:280])}{'…' if len(q) > 280 else ''}\n"
+        )
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=f"▶️ Начать консультацию #{cid}",
+                    callback_data=f"take_cn:{cli}:{cid}",
+                )
+            ]
+        )
+    await safe_send_message(
+        doctor_id,
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
     await call.answer()
 
 
@@ -734,6 +831,7 @@ async def doctor_online_callback(call: CallbackQuery):
         call, "🟢 Вы стали онлайн.", reply_markup=get_doctor_main_keyboard()
     )
     await call.answer()
+    await notify_doctor_offline_pending_on_login(doctor_id)
 
 
 @router.callback_query(lambda c: c.data == "doctor_offline")

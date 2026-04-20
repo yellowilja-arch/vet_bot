@@ -374,11 +374,23 @@ def get_doctor_busy_keyboard(doctor_id: int) -> InlineKeyboardMarkup:
 
 
 
-def get_doctor_offline_keyboard() -> InlineKeyboardMarkup:
+def get_doctor_offline_keyboard(doctor_id: int) -> InlineKeyboardMarkup:
 
     return InlineKeyboardMarkup(
 
         inline_keyboard=[
+
+            [
+
+                InlineKeyboardButton(
+
+                    text="💰 Оплатить (ответ до 24 ч)",
+
+                    callback_data=f"pay_direct_offline:{doctor_id}",
+
+                )
+
+            ],
 
             [InlineKeyboardButton(text="🔄 Выбрать другого", callback_data="doclist_reopen")],
 

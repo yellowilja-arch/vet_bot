@@ -147,15 +147,34 @@ async def init_db():
         print("✅ Колонка sterilization добавлена")
     except Exception:
         pass
+
+    try:
+        await db.execute(
+            "ALTER TABLE consultations ADD COLUMN waiting_reply_since TIMESTAMP"
+        )
+        print("✅ Колонка waiting_reply_since добавлена")
+    except Exception:
+        pass
+
+    try:
+        await db.execute(
+            "ALTER TABLE consultations ADD COLUMN offline_intake INTEGER DEFAULT 0"
+        )
+        print("✅ Колонка offline_intake добавлена")
+    except Exception:
+        pass
     
     # Уникальный индекс для активных консультаций
     await db.execute('''
         CREATE UNIQUE INDEX IF NOT EXISTS idx_active_client
         ON consultations(client_id) WHERE status = 'active'
     ''')
+    await db.execute("DROP INDEX IF EXISTS idx_open_client_consultation")
     await db.execute('''
         CREATE UNIQUE INDEX IF NOT EXISTS idx_open_client_consultation
-        ON consultations(client_id) WHERE status IN ('waiting_payment', 'paid', 'active')
+        ON consultations(client_id) WHERE status IN (
+            'waiting_payment', 'paid', 'active', 'waiting_doctor_offline'
+        )
     ''')
     
     # Платежи
