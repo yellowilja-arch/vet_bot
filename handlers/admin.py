@@ -44,6 +44,52 @@ def _parse_int(value: str):
         return None
 
 
+async def _reply_admin_stats(user_id: int) -> None:
+    db = await get_db()
+    cursor = await db.execute("SELECT COUNT(*) FROM users")
+    users = (await cursor.fetchone())[0]
+    cursor = await db.execute("SELECT COUNT(*) FROM consultations")
+    cons = (await cursor.fetchone())[0]
+    cursor = await db.execute('SELECT COUNT(*) FROM consultations WHERE status = "active"')
+    active = (await cursor.fetchone())[0]
+    await safe_send_message(
+        user_id,
+        f"📊 Статистика\n👤 Пользователей: {users}\n📋 Консультаций: {cons}\n🟢 Активных: {active}",
+    )
+
+
+async def _reply_admin_health(user_id: int) -> None:
+    try:
+        r.ping()
+        redis_status = "✅"
+    except Exception as e:
+        redis_status = f"❌ {e}"
+
+    try:
+        db = await get_db()
+        await db.execute("SELECT 1")
+        sqlite_status = "✅"
+    except Exception as e:
+        sqlite_status = f"❌ {e}"
+
+    try:
+        cursor = await db.execute('SELECT COUNT(*) FROM consultations WHERE status = "active"')
+        active_cons = (await cursor.fetchone())[0]
+    except Exception:
+        active_cons = "ошибка"
+
+    online_doctors = sum(1 for d in DOCTOR_IDS if get_doctor_status(d) == "online")
+    queue_lengths = {"all": await get_queue_length("all")}
+
+    text = f"🩺 <b>Здоровье бота</b>\n\n"
+    text += f"Redis: {redis_status}\n"
+    text += f"SQLite: {sqlite_status}\n"
+    text += f"Активных консультаций: {active_cons}\n"
+    text += f"Врачей онлайн: {online_doctors}\n"
+    text += f"Очередь: {queue_lengths}\n"
+    await safe_send_message(user_id, text, parse_mode="HTML")
+
+
 @router.message(Command("clearqueue"))
 async def admin_clear_queue(message: Message):
     """Сброс Redis/SQLite очереди (в т.ч. после тестов с битым client_id)."""
@@ -142,16 +188,15 @@ async def admin_stats(message: Message):
     if not await user_in_admin_context(user_id):
         await safe_send_message(user_id, "⛔ Доступ запрещен. Используйте /admin или /start.")
         return
-    
-    db = await get_db()
-    cursor = await db.execute('SELECT COUNT(*) FROM users')
-    users = (await cursor.fetchone())[0]
-    cursor = await db.execute('SELECT COUNT(*) FROM consultations')
-    cons = (await cursor.fetchone())[0]
-    cursor = await db.execute('SELECT COUNT(*) FROM consultations WHERE status = "active"')
-    active = (await cursor.fetchone())[0]
-    
-    await safe_send_message(user_id, f"📊 Статистика\n👤 Пользователей: {users}\n📋 Консультаций: {cons}\n🟢 Активных: {active}")
+    await _reply_admin_stats(user_id)
+
+
+@router.message(F.text == "📊 Статистика")
+async def admin_stats_button(message: Message):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    await _reply_admin_stats(user_id)
 
 
 @router.message(Command("ban"))
@@ -209,38 +254,15 @@ async def health_check(message: Message):
     if not await user_in_admin_context(user_id):
         await safe_send_message(user_id, "⛔ Только для админов. /admin")
         return
-    
-    try:
-        r.ping()
-        redis_status = "✅"
-    except Exception as e:
-        redis_status = f"❌ {e}"
-    
-    try:
-        db = await get_db()
-        await db.execute("SELECT 1")
-        sqlite_status = "✅"
-    except Exception as e:
-        sqlite_status = f"❌ {e}"
-    
-    try:
-        cursor = await db.execute('SELECT COUNT(*) FROM consultations WHERE status = "active"')
-        active_cons = (await cursor.fetchone())[0]
-    except:
-        active_cons = "ошибка"
-    
-    online_doctors = sum(1 for d in DOCTOR_IDS if get_doctor_status(d) == "online")
-    
-    queue_lengths = {"all": await get_queue_length("all")}
-    
-    text = f"🩺 <b>Здоровье бота</b>\n\n"
-    text += f"Redis: {redis_status}\n"
-    text += f"SQLite: {sqlite_status}\n"
-    text += f"Активных консультаций: {active_cons}\n"
-    text += f"Врачей онлайн: {online_doctors}\n"
-    text += f"Очередь: {queue_lengths}\n"
-    
-    await safe_send_message(user_id, text, parse_mode="HTML")
+    await _reply_admin_health(user_id)
+
+
+@router.message(F.text == "🩺 Здоровье")
+async def admin_health_button(message: Message):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    await _reply_admin_health(user_id)
 
 
 @router.message(Command("user"))
@@ -309,6 +331,175 @@ async def reset_all(message: Message):
 
     await reset_all_states()
     await safe_send_message(user_id, "✅ Все состояния сброшены")
+
+
+@router.message(F.text == "🔄 Сброс состояний")
+async def reset_all_button(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    await state.set_state(AdminState.waiting_resetall_confirm)
+    await safe_send_message(
+        user_id,
+        "⚠️ Будут сброшены все состояния бота (Redis + активные консультации в БД).\n\n"
+        "Для подтверждения отправьте слово <b>ДА</b> заглавными.\n"
+        "/cancel — отмена.",
+        parse_mode="HTML",
+    )
+
+
+@router.message(AdminState.waiting_resetall_confirm, F.text)
+async def reset_all_confirm(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    if (message.text or "").strip() != "ДА":
+        await safe_send_message(user_id, "Отправьте ровно «ДА» или /cancel")
+        return
+    await state.clear()
+    await reset_all_states()
+    await safe_send_message(user_id, "✅ Все состояния сброшены")
+
+
+@router.message(F.text == "🚫 Заблокировать")
+async def ban_button(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    await state.set_state(AdminState.waiting_ban_user_id)
+    await safe_send_message(
+        user_id,
+        "Введите <b>Telegram ID</b> пользователя для блокировки (целое число).\n"
+        "/cancel — отмена.",
+        parse_mode="HTML",
+    )
+
+
+@router.message(AdminState.waiting_ban_user_id, F.text)
+async def ban_receive_user_id(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    raw = (message.text or "").strip()
+    target_id = _parse_int(raw)
+    if target_id is None:
+        await safe_send_message(user_id, "⚠️ Нужен числовой ID. Попробуйте снова или /cancel")
+        return
+    await state.update_data(ban_target_id=target_id)
+    await state.set_state(AdminState.waiting_ban_reason)
+    await safe_send_message(
+        user_id,
+        "Введите <b>причину</b> блокировки.\n"
+        "Или отправьте <code>-</code> если без причины.\n/cancel — отмена.",
+        parse_mode="HTML",
+    )
+
+
+@router.message(AdminState.waiting_ban_reason, F.text)
+async def ban_receive_reason(message: Message, state: FSMContext):
+    admin_id = message.from_user.id
+    if not await user_in_admin_context(admin_id):
+        return
+    data = await state.get_data()
+    target_id = data.get("ban_target_id")
+    if target_id is None:
+        await state.clear()
+        await safe_send_message(admin_id, "Сессия сброшена. Начните с кнопки снова.")
+        return
+    reason_raw = (message.text or "").strip()
+    reason = None if reason_raw == "-" else reason_raw
+    db = await get_db()
+    await db.execute(
+        "INSERT OR REPLACE INTO blacklist (user_id, reason, blocked_by) VALUES (?, ?, ?)",
+        (target_id, reason, admin_id),
+    )
+    await db.commit()
+    await state.clear()
+    await safe_send_message(admin_id, f"🚫 Пользователь {target_id} заблокирован")
+    try:
+        await safe_send_message(
+            int(target_id),
+            f"⛔ Вы заблокированы. Причина: {reason or 'не указана'}",
+        )
+    except Exception:
+        pass
+
+
+@router.message(F.text == "✅ Разблокировать")
+async def unban_button(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    await state.set_state(AdminState.waiting_unban_user_id)
+    await safe_send_message(
+        user_id,
+        "Введите <b>Telegram ID</b> пользователя для разблокировки.\n/cancel — отмена.",
+        parse_mode="HTML",
+    )
+
+
+@router.message(AdminState.waiting_unban_user_id, F.text)
+async def unban_receive_user_id(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    target_id = _parse_int((message.text or "").strip())
+    if target_id is None:
+        await safe_send_message(user_id, "⚠️ Нужен числовой ID.")
+        return
+    db = await get_db()
+    await db.execute("DELETE FROM blacklist WHERE user_id = ?", (target_id,))
+    await db.commit()
+    await state.clear()
+    await safe_send_message(user_id, f"✅ Пользователь {target_id} разблокирован")
+    try:
+        await safe_send_message(target_id, "✅ Вы разблокированы")
+    except Exception:
+        pass
+
+
+@router.message(F.text == "➖ Удалить врача")
+async def remove_doctor_button(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    await state.set_state(AdminState.waiting_remove_doctor_id)
+    await safe_send_message(
+        user_id,
+        "Введите <b>Telegram ID</b> врача для удаления из системы.\n/cancel — отмена.",
+        parse_mode="HTML",
+    )
+
+
+@router.message(AdminState.waiting_remove_doctor_id, F.text)
+async def remove_doctor_receive_id(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    tid = _parse_int((message.text or "").strip())
+    if tid is None:
+        await safe_send_message(user_id, "⚠️ Нужен числовой telegram_id врача.")
+        return
+    await remove_doctor(tid)
+    await state.clear()
+    await safe_send_message(user_id, f"✅ Врач {tid} удалён из системы")
+
+
+@router.message(
+    Command("cancel"),
+    StateFilter(
+        AdminState.waiting_ban_user_id,
+        AdminState.waiting_ban_reason,
+        AdminState.waiting_unban_user_id,
+        AdminState.waiting_remove_doctor_id,
+        AdminState.waiting_resetall_confirm,
+    ),
+)
+async def admin_reply_keyboard_flow_cancel(message: Message, state: FSMContext):
+    if not await user_in_admin_context(message.from_user.id):
+        return
+    await state.clear()
+    await safe_send_message(message.from_user.id, "❌ Действие отменено.")
 
 
 @router.message(Command("closestuck"))

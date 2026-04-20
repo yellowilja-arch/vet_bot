@@ -1,3 +1,6 @@
+import secrets
+
+import aiohttp
 import redis
 
 from aiogram import Router, F
@@ -12,7 +15,14 @@ from aiogram.types import (
 )
 from aiogram.fsm.context import FSMContext
 from html import escape
-from config import ADMIN_IDS, PHONE_NUMBER, DEFAULT_CONSULTATION_PRICE, REDIS_URL
+from config import (
+    ADMIN_IDS,
+    PHONE_NUMBER,
+    DEFAULT_CONSULTATION_PRICE,
+    REDIS_URL,
+    PUBLIC_WEBHOOK_BASE,
+    tbank_acquiring_configured,
+)
 from data.problems import PROBLEMS, SPECIALISTS
 from services.validators import (
     is_blocked,
@@ -42,7 +52,7 @@ from database.consultations import (
     assign_pending_doctor_direct,
     get_consultation_doctor_and_topic,
 )
-from database.payments import save_payment
+from database.payments import save_payment, save_tbank_pending_payment
 from database.users import save_user_if_new
 from database.support import (
     add_support_message,
@@ -60,6 +70,8 @@ from keyboards.client import (
     get_condition_keyboard,
     get_rating_keyboard,
     get_recent_illness_keyboard,
+    get_vaccination_keyboard,
+    get_sterilization_keyboard,
     get_support_keyboard,
     get_waiting_keyboard,
     get_back_keyboard,
@@ -554,9 +566,102 @@ async def select_topic(message: Message, state: FSMContext):
         f"📋 <b>{escape(title)}</b>\n\n"
         f"💰 Стоимость: {price} ₽\n\n"
         f"После оплаты вы заполните информацию о питомце.",
-        reply_markup=get_topic_pay_keyboard(key),
+        reply_markup=get_topic_pay_keyboard(key, include_tbank=tbank_acquiring_configured()),
         parse_mode="HTML",
     )
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("pay_tbank:"))
+async def pay_tbank_topic(call: CallbackQuery, state: FSMContext):
+    """MVP: создание платежа Init и ссылка на форму Т-Банка."""
+    from services.tbank import tbank_init_payment
+
+    spec_key = call.data.split(":", 1)[1]
+    if spec_key not in SPECIALISTS:
+        await call.answer("Некорректная тема", show_alert=True)
+        return
+    user_id = call.from_user.id
+    if not await user_in_client_context(user_id):
+        await call.answer("⛔", show_alert=True)
+        return
+    if not tbank_acquiring_configured():
+        await call.answer("Онлайн-оплата не настроена.", show_alert=True)
+        return
+    if not PUBLIC_WEBHOOK_BASE:
+        await call.answer("Не задан PUBLIC_WEBHOOK_BASE.", show_alert=True)
+        return
+    available = await topic_keys_available_for_client_menu()
+    if spec_key not in available:
+        await call.answer("Тема недоступна (нет врачей онлайн)", show_alert=True)
+        return
+
+    title = SPECIALISTS[spec_key]
+    price = DEFAULT_CONSULTATION_PRICE
+    anonymous_id = get_anonymous_id(spec_key, user_id)
+
+    consultation_id = await save_consultation_start(user_id, anonymous_id, None, spec_key)
+    if not consultation_id:
+        await call.answer("Сначала завершите текущую консультацию или нажмите /start.", show_alert=True)
+        return
+
+    order_id = f"v{consultation_id}-{secrets.token_hex(4)}"
+    order_id = order_id[:36]
+
+    await save_tbank_pending_payment(user_id, consultation_id, price, order_id)
+
+    notification_url = f"{PUBLIC_WEBHOOK_BASE}/tbank/notify"
+    description = f"Консультация {title}"[:140]
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            data = await tbank_init_payment(
+                amount_kopecks=price * 100,
+                order_id=order_id,
+                description=description,
+                notification_url=notification_url,
+                session=session,
+            )
+    except Exception as e:
+        await call.answer("Ошибка связи с банком", show_alert=True)
+        await safe_send_message(user_id, f"❌ Не удалось создать платёж: {escape(str(e))}")
+        return
+
+    if not data.get("Success"):
+        msg = data.get("Details") or data.get("Message") or str(data)
+        await call.answer("Банк не создал платёж", show_alert=True)
+        await safe_send_message(user_id, f"❌ Ответ Т-Банка: {escape(str(msg))}")
+        return
+
+    pay_url = data.get("PaymentURL")
+    if not pay_url:
+        await call.answer("Нет ссылки на оплату", show_alert=True)
+        return
+
+    await state.update_data(
+        problem_key=spec_key,
+        selected_problem=spec_key,
+        problem_name=title,
+        problem_price=price,
+        consultation_id=consultation_id,
+        anonymous_id=anonymous_id,
+    )
+    await state.set_state(PaymentState.waiting_confirmation)
+
+    await call.message.edit_text(
+        f"💳 <b>Оплата картой (Т-Банк)</b>\n\n"
+        f"Тема: {escape(title)}\n"
+        f"Сумма: {price} ₽\n\n"
+        f'<a href="{escape(str(pay_url), quote=True)}">Перейти к оплате</a>\n\n'
+        "После успешной оплаты откроется анкета о питомце.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🔗 Оплатить", url=str(pay_url))],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_payment")],
+            ]
+        ),
+    )
+    await call.answer()
 
 
 @router.callback_query(lambda c: c.data and c.data.startswith("pay_topic:"))
@@ -582,6 +687,13 @@ async def pay_topic(call: CallbackQuery, state: FSMContext):
         problem_name=title,
         problem_price=price,
     )
+    pay_rows: list[list[InlineKeyboardButton]] = []
+    if tbank_acquiring_configured() and PUBLIC_WEBHOOK_BASE:
+        pay_rows.append(
+            [InlineKeyboardButton(text="💳 Онлайн (Т-Банк)", callback_data=f"pay_tbank:{spec_key}")]
+        )
+    pay_rows.append([InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid_confirm")])
+
     await call.message.edit_text(
         f"💰 <b>Оплата консультации</b>\n\n"
         f"Тема: {escape(title)}\n"
@@ -589,11 +701,7 @@ async def pay_topic(call: CallbackQuery, state: FSMContext):
         f"📞 Оплата по номеру телефона (СБП):\n"
         f"<code>{PHONE_NUMBER}</code>\n\n"
         f"✅ После оплаты нажмите кнопку ниже и отправьте чек.",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid_confirm")],
-            ]
-        ),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=pay_rows),
         parse_mode="HTML",
     )
     await call.answer()
@@ -851,6 +959,71 @@ async def process_chronic(message: Message, state: FSMContext):
     )
 
 
+async def _send_vaccination_step(chat_id: int, state: FSMContext) -> None:
+    await state.set_state(QuestionnaireState.waiting_vaccination)
+    await safe_send_message(
+        chat_id,
+        "💉 <b>Была ли проведена комплексная вакцинация?</b>\n\n"
+        "Комплексная вакцинация защищает от основных заболеваний:\n"
+        "собаки — чума, парвовирус, аденовирус, лептоспироз\n"
+        "кошки — ринотрахеит, калицивироз, панлейкопения",
+        reply_markup=get_vaccination_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+async def _send_sterilization_step(chat_id: int, state: FSMContext) -> None:
+    await state.set_state(QuestionnaireState.waiting_sterilization)
+    await safe_send_message(
+        chat_id,
+        "✂️ <b>Проведена ли кастрация / стерилизация?</b>\n\n"
+        "Кастрация — удаление семенников (самцы)\n"
+        "Стерилизация — удаление матки и яичников (самки)",
+        reply_markup=get_sterilization_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+_VAC_MAP = {"vac:yes": "Да", "vac:no": "Нет", "vac:unk": "Не знаю"}
+_STER_MAP = {"ster:yes": "Да", "ster:no": "Нет", "ster:unk": "Не знаю"}
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("vac:"))
+async def vaccination_chosen(call: CallbackQuery, state: FSMContext):
+    if await state.get_state() != QuestionnaireState.waiting_vaccination.state:
+        await call.answer()
+        return
+    label = _VAC_MAP.get(call.data)
+    if not label:
+        await call.answer()
+        return
+    await state.update_data(vaccination=label)
+    await call.answer()
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await _send_sterilization_step(call.message.chat.id, state)
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("ster:"))
+async def sterilization_chosen(call: CallbackQuery, state: FSMContext):
+    if await state.get_state() != QuestionnaireState.waiting_sterilization.state:
+        await call.answer()
+        return
+    label = _STER_MAP.get(call.data)
+    if not label:
+        await call.answer()
+        return
+    await state.update_data(sterilization=label)
+    await call.answer()
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await send_pet_info_to_doctor(call.message, state)
+
+
 @router.callback_query(lambda c: c.data == "no_recent_illness")
 async def no_recent_illness(call: CallbackQuery, state: FSMContext):
     await state.update_data(recent_illness="Нет")
@@ -859,7 +1032,7 @@ async def no_recent_illness(call: CallbackQuery, state: FSMContext):
         await call.message.delete()
     except Exception:
         pass
-    await send_pet_info_to_doctor(call.message, state)
+    await _send_vaccination_step(call.message.chat.id, state)
 
 
 @router.message(QuestionnaireState.waiting_recent_illness)
@@ -872,7 +1045,7 @@ async def process_recent_illness(message: Message, state: FSMContext):
         )
         return
     await state.update_data(recent_illness=text)
-    await send_pet_info_to_doctor(message, state)
+    await _send_vaccination_step(message.from_user.id, state)
 
 
 async def send_pet_info_to_doctor(message: Message, state: FSMContext):
@@ -886,6 +1059,8 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     condition = data.get("condition", "Не указана")
     chronic = data.get("chronic", "Не указано")
     recent_illness = data.get("recent_illness", "Не указано")
+    vaccination = data.get("vaccination", "Не указано")
+    sterilization = data.get("sterilization", "Не указано")
     consultation_id = data.get("consultation_id")
     anonymous_id = data.get("anonymous_id", "anon")
     if not consultation_id:
@@ -904,9 +1079,23 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
             pet_breed = ?,
             pet_condition = ?,
             pet_chronic = ?,
-            recent_illness = ?
+            recent_illness = ?,
+            vaccination = ?,
+            sterilization = ?
         WHERE id = ?
-    ''', (pet_name, species, age, weight, breed, condition, chronic, recent_illness, consultation_id))
+    ''', (
+        pet_name,
+        species,
+        age,
+        weight,
+        breed,
+        condition,
+        chronic,
+        recent_illness,
+        vaccination,
+        sterilization,
+        consultation_id,
+    ))
     await db.commit()
 
     uid = _client_telegram_id(message)
@@ -926,6 +1115,8 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
         f"📊 Упитанность: {escape(str(condition))}\n"
         f"💊 Хронические заболевания: {escape(str(chronic))}\n"
         f"🩺 Болезни за последний месяц: {escape(str(recent_illness))}\n"
+        f"💉 Комплексная вакцинация: {escape(str(vaccination))}\n"
+        f"✂️ Кастрация/стерилизация: {escape(str(sterilization))}\n"
     )
 
     doc_row = await get_consultation_doctor_and_topic(consultation_id)
