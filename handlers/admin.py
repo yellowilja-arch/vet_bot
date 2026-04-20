@@ -98,13 +98,22 @@ def _stats_name_title(s: str) -> str:
 
 
 def _stats_spec_sentence_case(s: str) -> str:
-    """Специализация: с заглавной только первое слово, остальные — строчные."""
+    """Специализация: префикс из эмодзи не трогаем; первое слово с букв — с заглавной, остальные строчные."""
     parts = s.split()
     if not parts:
         return s
-    first = parts[0][:1].upper() + parts[0][1:].lower()
-    rest = [p.lower() for p in parts[1:]]
-    return " ".join([first, *rest])
+    i = 0
+    while i < len(parts) and not any(ch.isalpha() for ch in parts[i]):
+        i += 1
+    if i >= len(parts):
+        return s
+    prefix = " ".join(parts[:i])
+    if prefix:
+        prefix += " "
+    first_w = parts[i]
+    first = first_w[:1].upper() + first_w[1:].lower()
+    rest = [p.lower() for p in parts[i + 1 :]]
+    return f"{prefix}{' '.join([first, *rest])}".strip()
 
 
 async def _reply_admin_stats(user_id: int) -> None:

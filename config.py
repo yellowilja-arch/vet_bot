@@ -51,8 +51,10 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 # ============================================
 # SQLite
 # ============================================
-
-DB_PATH = "vet_bot.db"
+# Без постоянного тома на PaaS (Railway и т.п.) файл БД и vet_bot.db-wal / -shm
+# создаются заново при деплое — счётчики пользователей/консультаций обнуляются.
+# Задайте DB_PATH на смонтированный диск или используйте внешнюю БД.
+DB_PATH = os.getenv("DB_PATH", "vet_bot.db")
 
 # ============================================
 # НАСТРОЙКИ ТАЙМАУТОВ
@@ -71,38 +73,11 @@ from data.problems import SPECIALISTS, SPECIALIZATION_KEYS  # noqa: E402
 # Стоимость консультации при выборе темы из меню (динамический список из БД)
 DEFAULT_CONSULTATION_PRICE = 500
 
-# Врачи по специализациям (Telegram ID) — legacy из конфига; основная маршрутизация — через БД
-DOCTORS = {
-    "gp": [1092230808],
-    "therapist": [1906114179],
-    "oncologist": [201000001],
-    "cardiologist": [201000002],
-    "gastroenterologist": [201000003],
-    "orthopedist": [201000004],
-    "surgeon": [1092230808],
-    "nephrologist": [201000005],
-    "neurologist": [201000006],
-    "dermatologist": [201000007],
-    "reproductologist": [201000008],
-    "virologist": [201000009],
-    "radiologist": [201000010],
-}
+# Legacy: почти не используется (маршрутизация — pick_doctor_for_topic → SQLite).
+DOCTORS = {k: [] for k in SPECIALIZATION_KEYS}
 
-# Начальные врачи (инициализация БД). Замените ID на боевые.
-INITIAL_DOCTORS = {
-    "therapist": [{"id": 1906114179, "name": "Васильева Елена"}],
-    "oncologist": [{"id": 201000001, "name": "Петров Иван"}],
-    "cardiologist": [{"id": 201000002, "name": "Сидорова Мария"}],
-    "gastroenterologist": [{"id": 201000003, "name": "Кузнецов Алексей"}],
-    "orthopedist": [{"id": 201000004, "name": "Соколов Дмитрий"}],
-    "surgeon": [{"id": 1092230808, "name": "Корнев Михаил"}],
-    "nephrologist": [{"id": 201000005, "name": "Павлова Ольга"}],
-    "neurologist": [{"id": 201000006, "name": "Новиков Андрей"}],
-    "dermatologist": [{"id": 201000007, "name": "Морозова Екатерина"}],
-    "reproductologist": [{"id": 201000008, "name": "Волков Сергей"}],
-    "virologist": [{"id": 201000009, "name": "Зайцева Анна"}],
-    "radiologist": [{"id": 201000010, "name": "Соловьев Илья"}],
-}
+# Опциональный сид при первом запуске. Вымышленные ID < 1e9 удаляются при старте в init_doctors.
+INITIAL_DOCTORS: dict[str, list[dict]] = {}
 
 # Глобальный список ID врачей (заполняется при загрузке)
 DOCTOR_IDS = []

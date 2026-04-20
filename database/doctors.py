@@ -1,3 +1,4 @@
+import logging
 import redis
 from config import REDIS_URL, INITIAL_DOCTORS, SPECIALISTS
 from database.db import get_db
@@ -26,16 +27,32 @@ async def load_doctors_from_db():
     return DOCTOR_IDS
 
 async def init_doctors():
-    """Добавляет начальных врачей в БД при первом запуске"""
+    """
+    Удаляет врачей-заглушек (telegram_id < REAL_TELEGRAM_USER_ID_MIN), затем
+    при необходимости добавляет строки из INITIAL_DOCTORS (INSERT OR IGNORE).
+    Реальных врачей заводите через админ-панель — они хранятся в SQLite до удаления.
+    """
     db = await get_db()
+    await db.execute(
+        "DELETE FROM doctors WHERE telegram_id < ?",
+        (REAL_TELEGRAM_USER_ID_MIN,),
+    )
+    await db.commit()
     for spec, doctors in INITIAL_DOCTORS.items():
         for doc in doctors:
-            await db.execute('''
+            await db.execute(
+                """
                 INSERT OR IGNORE INTO doctors (telegram_id, name, specialization, is_active)
                 VALUES (?, ?, ?, 1)
-            ''', (doc["id"], doc["name"], spec))
+                """,
+                (doc["id"], doc["name"], spec),
+            )
     await db.commit()
     await load_doctors_from_db()
+    logging.info(
+        "Врачи в БД после init_doctors: %s (INITIAL_DOCTORS задаёт только опциональный сид)",
+        len(DOCTOR_IDS),
+    )
 
 async def get_doctor_name(doctor_id: int):
     """Возвращает имя врача по его Telegram ID"""
