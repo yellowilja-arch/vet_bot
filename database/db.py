@@ -136,6 +136,17 @@ async def init_db():
         print("✅ Колонка recent_illness добавлена")
     except:
         pass
+
+    try:
+        await db.execute("ALTER TABLE consultations ADD COLUMN vaccination TEXT")
+        print("✅ Колонка vaccination добавлена")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE consultations ADD COLUMN sterilization TEXT")
+        print("✅ Колонка sterilization добавлена")
+    except Exception:
+        pass
     
     # Уникальный индекс для активных консультаций
     await db.execute('''
@@ -160,6 +171,19 @@ async def init_db():
             confirmed_at TIMESTAMP
         )
     ''')
+    try:
+        await db.execute("ALTER TABLE payments ADD COLUMN tbank_order_id TEXT")
+        print("✅ Колонка tbank_order_id добавлена")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE payments ADD COLUMN tbank_payment_id TEXT")
+        print("✅ Колонка tbank_payment_id добавлена")
+    except Exception:
+        pass
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_payments_tbank_order ON payments(tbank_order_id)"
+    )
     
     # Очередь (бэкап)
     await db.execute('''
