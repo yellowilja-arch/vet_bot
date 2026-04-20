@@ -6,6 +6,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.redis import RedisStorage
 import redis.asyncio as redis_async
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+from aiogram.types import ErrorEvent
 from config import BOT_TOKEN, ADMIN_IDS, REDIS_URL
 from handlers import register_handlers
 from services.bot_commands import default_scope_commands
@@ -24,12 +25,20 @@ dp = Dispatcher(storage=RedisStorage(redis=redis_client))
 logging.info(f"🔑 Загруженные администраторы: {ADMIN_IDS}")
 
 @dp.error()
-async def global_error_handler(*args, exception=None, **kwargs):
-    if exception is None and len(args) >= 2:
-        exception = args[1]
-    logging.error(f"Глобальная ошибка: {exception}")
+async def global_error_handler(event: ErrorEvent):
+    """В aiogram 3 в хендлер передаётся ErrorEvent; exception в kwargs нет — иначе в логах всегда None."""
+    exc = event.exception
+    if exc is not None:
+        logging.error("Глобальная ошибка: %s", exc, exc_info=exc)
+    else:
+        logging.error("Глобальная ошибка: exception отсутствует в ErrorEvent")
+    detail = escape(str(exc)) if exc is not None else "неизвестная ошибка"
     for admin_id in ADMIN_IDS:
-        await safe_send_message(admin_id, f"❌ Глобальная ошибка бота:\n<pre>{escape(str(exception))}</pre>", parse_mode="HTML")
+        await safe_send_message(
+            admin_id,
+            f"❌ Глобальная ошибка бота:\n<pre>{detail}</pre>",
+            parse_mode="HTML",
+        )
     return True
 
 async def init_startup():
