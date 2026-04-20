@@ -15,7 +15,7 @@ from database.users import get_user_info, get_recent_users
 from database.doctors import add_doctor, remove_doctor, get_all_doctors, DOCTOR_IDS
 from database.queue import get_queue_length, clear_queue
 from database.db import get_db, checkpoint_wal_for_backup
-from utils.helpers import safe_send_message
+from utils.helpers import safe_send_message, split_text_chunks
 from keyboards.admin import get_support_queue_keyboard, get_add_doctor_spec_keyboard
 from data.problems import SPECIALISTS, SPECIALIZATION_KEYS
 from database.support import (
@@ -44,18 +44,91 @@ def _parse_int(value: str):
         return None
 
 
+def _role_label(uid: int, admin_ids: set[int], doctor_ids: set[int]) -> str:
+    in_a = uid in admin_ids
+    in_d = uid in doctor_ids
+    if in_a and in_d:
+        return "Админ + Врач"
+    if in_d:
+        return "Врач"
+    if in_a:
+        return "Админ"
+    return "Клиент"
+
+
 async def _reply_admin_stats(user_id: int) -> None:
     db = await get_db()
     cursor = await db.execute("SELECT COUNT(*) FROM users")
-    users = (await cursor.fetchone())[0]
+    users_total = (await cursor.fetchone())[0]
     cursor = await db.execute("SELECT COUNT(*) FROM consultations")
-    cons = (await cursor.fetchone())[0]
+    cons_total = (await cursor.fetchone())[0]
     cursor = await db.execute('SELECT COUNT(*) FROM consultations WHERE status = "active"')
     active = (await cursor.fetchone())[0]
-    await safe_send_message(
-        user_id,
-        f"📊 Статистика\n👤 Пользователей: {users}\n📋 Консультаций: {cons}\n🟢 Активных: {active}",
+    cursor = await db.execute("SELECT COUNT(*) FROM consultations WHERE ended_at IS NOT NULL")
+    completed = (await cursor.fetchone())[0]
+
+    cursor = await db.execute(
+        "SELECT telegram_id FROM doctors WHERE is_active = 1"
     )
+    doctor_rows = await cursor.fetchall()
+    doctor_ids = {int(r[0]) for r in doctor_rows}
+    admin_set = set(ADMIN_IDS)
+
+    cursor = await db.execute("SELECT user_id FROM blacklist")
+    blocked_ids = {int(r[0]) for r in await cursor.fetchall()}
+
+    cursor = await db.execute(
+        """
+        SELECT user_id, username
+        FROM users
+        ORDER BY (last_seen IS NULL), last_seen DESC, user_id ASC
+        """
+    )
+    all_user_rows = await cursor.fetchall()
+
+    display_n = min(20, len(all_user_rows))
+    rest = max(0, len(all_user_rows) - display_n)
+
+    lines: list[str] = [
+        "📊 <b>СТАТИСТИКА БОТА</b>",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        f"👥 <b>ПОЛЬЗОВАТЕЛИ ({users_total})</b>",
+        "",
+    ]
+    for row in all_user_rows[:display_n]:
+        uid = int(row[0])
+        uname = row[1]
+        at = f"@{escape(uname)}" if uname else "—"
+        role = _role_label(uid, admin_set, doctor_ids)
+        extra = ""
+        if uid in blocked_ids:
+            extra = " 🚫 заблокирован"
+        lines.append(f"👤 ID: <code>{uid}</code> | {at} | {escape(role)}{extra}")
+
+    if rest:
+        lines.append("")
+        lines.append(f"… и ещё {rest} пользователей")
+
+    lines.extend(
+        [
+            "",
+            "━━━━━━━━━━━━━━━━━━━━━━",
+            "📋 <b>КОНСУЛЬТАЦИИ</b>",
+            f"Всего: {cons_total} | Активных: {active} | Завершённых: {completed}",
+            "",
+            "━━━━━━━━━━━━━━━━━━━━━━",
+            "👨‍⚕️ <b>ВРАЧИ</b>",
+        ]
+    )
+    online = sum(1 for did in doctor_ids if get_doctor_status(did) == "online")
+    offline = len(doctor_ids) - online
+    lines.append(f"Всего в системе: {len(doctor_ids)}")
+    lines.append(f"Онлайн: {online} | Офлайн: {offline}")
+
+    text = "\n".join(lines)
+    for chunk in split_text_chunks(text, max_len=3900):
+        await safe_send_message(user_id, chunk, parse_mode="HTML")
 
 
 async def _reply_admin_health(user_id: int) -> None:
