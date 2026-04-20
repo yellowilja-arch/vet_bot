@@ -11,12 +11,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Any
 
 import aiohttp
 
 from config import (
     DOCTORS_SYNC_HTTP_HEADERS,
+    DOCTORS_SYNC_JSONBIN_MASTER_KEY,
     DOCTORS_SYNC_PULL_URL,
     DOCTORS_SYNC_PUSH_METHOD,
     DOCTORS_SYNC_PUSH_URL,
@@ -28,25 +30,53 @@ logger = logging.getLogger(__name__)
 
 
 def _sync_headers() -> dict[str, str]:
+    """Заголовки для jsonbin и др. Частая ошибка в Railway — ключ без JSON-объекта."""
+    out: dict[str, str] = {}
     raw = (DOCTORS_SYNC_HTTP_HEADERS or "").strip()
-    if not raw:
-        return {}
-    try:
-        h = json.loads(raw)
-        if not isinstance(h, dict):
-            return {}
-        return {str(k): str(v) for k, v in h.items()}
-    except json.JSONDecodeError as e:
-        logger.warning("DOCTORS_SYNC_HTTP_HEADERS не JSON: %s", e)
-        return {}
+    if raw:
+        try:
+            h = json.loads(raw)
+            if isinstance(h, dict):
+                out.update({str(k): str(v) for k, v in h.items()})
+            else:
+                logger.warning(
+                    "DOCTORS_SYNC_HTTP_HEADERS должен быть JSON-объектом, например "
+                    '{"X-Master-Key":"..."} или задайте DOCTORS_SYNC_JSONBIN_MASTER_KEY'
+                )
+        except json.JSONDecodeError:
+            if "{" not in raw and len(raw) >= 8:
+                out["X-Master-Key"] = raw
+                logger.info(
+                    "DOCTORS_SYNC: значение DOCTORS_SYNC_HTTP_HEADERS не JSON — "
+                    "используем его как X-Master-Key (удобно для jsonbin)."
+                )
+            else:
+                logger.warning(
+                    "DOCTORS_SYNC_HTTP_HEADERS не JSON (%s…). Задайте "
+                    '{"X-Master-Key":"ключ"} или переменную DOCTORS_SYNC_JSONBIN_MASTER_KEY.',
+                    raw[:20],
+                )
+    mk = (DOCTORS_SYNC_JSONBIN_MASTER_KEY or "").strip()
+    if mk:
+        out["X-Master-Key"] = mk
+    return out
 
 
 def _normalize_payload(data: Any) -> list[dict[str, Any]]:
     if data is None:
         return []
     if isinstance(data, dict):
-        if "record" in data and isinstance(data["record"], list):
-            data = data["record"]
+        if "record" in data:
+            rec = data["record"]
+            if isinstance(rec, str) and rec.strip():
+                try:
+                    rec = json.loads(rec)
+                except json.JSONDecodeError:
+                    return []
+            if isinstance(rec, list):
+                data = rec
+            else:
+                return []
         elif "doctors" in data and isinstance(data["doctors"], list):
             data = data["doctors"]
         else:
@@ -189,7 +219,10 @@ async def pull_doctors_from_remote() -> None:
         return
     rows = _normalize_payload(data)
     if not rows:
-        logger.info("DOCTORS_SYNC: нет валидных записей в ответе — пропуск импорта")
+        logger.warning(
+            "DOCTORS_SYNC: после GET нет валидных врачей в ответе — импорт пропущен "
+            "(проверьте ключ jsonbin, тело bin и формат массива с telegram_id/name/spec_keys)."
+        )
         return
     try:
         for r in rows:
@@ -218,6 +251,18 @@ async def push_doctors_to_remote() -> None:
     if method not in ("POST", "PUT", "PATCH"):
         method = "PUT"
     payload = await export_doctors_for_sync()
+    if not payload:
+        allow_empty = os.getenv("DOCTORS_SYNC_ALLOW_EMPTY_PUSH", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if not allow_empty:
+            logger.warning(
+                "DOCTORS_SYNC: выгрузка отменена — в SQLite нет врачей (пустой PUT стирает бэкап в jsonbin). "
+                "Добавьте врачей или задайте DOCTORS_SYNC_ALLOW_EMPTY_PUSH=1 чтобы разрешить пустую запись."
+            )
+            return
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {**_sync_headers(), "Content-Type": "application/json"}
     try:
