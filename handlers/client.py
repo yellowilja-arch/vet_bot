@@ -15,14 +15,22 @@ from aiogram.types import (
 )
 from aiogram.fsm.context import FSMContext
 from html import escape
-from config import (
-    ADMIN_IDS,
-    PHONE_NUMBER,
-    DEFAULT_CONSULTATION_PRICE,
-    REDIS_URL,
-    PUBLIC_WEBHOOK_BASE,
-    tbank_acquiring_configured,
-)
+import config as app_config
+from config import ADMIN_IDS, PHONE_NUMBER, DEFAULT_CONSULTATION_PRICE, REDIS_URL
+
+# Старые деплои без блока Т-Банка в config — не падаем при импорте
+PUBLIC_WEBHOOK_BASE = getattr(app_config, "PUBLIC_WEBHOOK_BASE", None) or ""
+
+
+def tbank_acquiring_configured() -> bool:
+    fn = getattr(app_config, "tbank_acquiring_configured", None)
+    if callable(fn):
+        return fn()
+    return bool(
+        getattr(app_config, "TBANK_TERMINAL_KEY", "")
+        and getattr(app_config, "TBANK_PASSWORD", "")
+        and PUBLIC_WEBHOOK_BASE
+    )
 from data.problems import PROBLEMS, SPECIALISTS
 from services.validators import (
     is_blocked,
