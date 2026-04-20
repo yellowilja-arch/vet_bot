@@ -2,6 +2,22 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 
 from data.problems import SPECIALISTS, SPECIALIZATION_KEYS
 
+# Тексты кнопок главной админ-клавиатуры (сброс FSM при нажатии во время мастеров)
+ADMIN_MAIN_KEYBOARD_TEXTS = frozenset(
+    {
+        "📬 Обращения",
+        "📊 Статистика",
+        "🩺 Здоровье",
+        "🚫 Заблокировать",
+        "✅ Разблокировать",
+        "➕ Добавить врача",
+        "➖ Удалить врача",
+        "🔄 Сброс состояний",
+        "💾 Бэкап",
+    }
+)
+
+
 def get_admin_main_keyboard():
     """Главная панель администратора"""
     return ReplyKeyboardMarkup(
