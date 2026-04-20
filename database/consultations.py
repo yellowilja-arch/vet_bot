@@ -123,6 +123,17 @@ async def get_consultation_doctor_and_topic(consultation_id: int):
     return await cursor.fetchone()
 
 
+async def get_consultation_problem_key(consultation_id: int) -> str | None:
+    """Ключ темы (специализации) для консультации."""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT problem_key FROM consultations WHERE id = ?",
+        (consultation_id,),
+    )
+    row = await cursor.fetchone()
+    return row[0] if row else None
+
+
 async def assign_pending_doctor_from_topic(consultation_id: int, topic_key: str) -> int | None:
     """Первичное закрепление врача по теме (после чека). Возвращает telegram_id врача или None."""
     from services.routing import pick_doctor_for_topic

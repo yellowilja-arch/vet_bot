@@ -12,6 +12,54 @@ async def save_payment(client_id: int, consultation_id: int, receipt_file_id: st
         await db.commit()
 
 
+async def save_tbank_pending_payment(
+    client_id: int,
+    consultation_id: int,
+    amount_rubles: int,
+    tbank_order_id: str,
+) -> None:
+    """Ожидание оплаты через Т-Банк (без фото чека)."""
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            """
+            INSERT INTO payments (client_id, consultation_id, amount, status, receipt_file_id, tbank_order_id)
+            VALUES (?, ?, ?, 'pending', NULL, ?)
+            """,
+            (client_id, consultation_id, int(amount_rubles), tbank_order_id),
+        )
+        await db.commit()
+
+
+async def get_payment_by_tbank_order_id(tbank_order_id: str):
+    """Последняя запись по OrderId Т-Банка."""
+    db = await get_db()
+    cursor = await db.execute(
+        """
+        SELECT id, client_id, consultation_id, amount, status, tbank_order_id, tbank_payment_id
+        FROM payments
+        WHERE tbank_order_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (tbank_order_id,),
+    )
+    return await cursor.fetchone()
+
+
+async def set_tbank_payment_id_for_order(tbank_order_id: str, tbank_payment_id: str) -> None:
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            """
+            UPDATE payments SET tbank_payment_id = ?
+            WHERE tbank_order_id = ? AND status = 'pending'
+            """,
+            (tbank_payment_id, tbank_order_id),
+        )
+        await db.commit()
+
+
 async def confirm_payment(client_id: int, consultation_id: int):
     """Подтверждает текущий ожидающий платёж (в т.ч. при повторных консультациях клиента)."""
     db = await get_db()

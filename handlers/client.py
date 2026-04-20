@@ -1,6 +1,3 @@
-import secrets
-
-import aiohttp
 import redis
 
 from aiogram import Router, F
@@ -15,22 +12,7 @@ from aiogram.types import (
 )
 from aiogram.fsm.context import FSMContext
 from html import escape
-import config as app_config
 from config import ADMIN_IDS, PHONE_NUMBER, DEFAULT_CONSULTATION_PRICE, REDIS_URL
-
-# Старые деплои без блока Т-Банка в config — не падаем при импорте
-PUBLIC_WEBHOOK_BASE = getattr(app_config, "PUBLIC_WEBHOOK_BASE", None) or ""
-
-
-def tbank_acquiring_configured() -> bool:
-    fn = getattr(app_config, "tbank_acquiring_configured", None)
-    if callable(fn):
-        return fn()
-    return bool(
-        getattr(app_config, "TBANK_TERMINAL_KEY", "")
-        and getattr(app_config, "TBANK_PASSWORD", "")
-        and PUBLIC_WEBHOOK_BASE
-    )
 from data.problems import PROBLEMS, SPECIALISTS
 from services.validators import (
     is_blocked,
@@ -60,7 +42,7 @@ from database.consultations import (
     assign_pending_doctor_direct,
     get_consultation_doctor_and_topic,
 )
-from database.payments import save_payment, save_tbank_pending_payment
+from database.payments import save_payment
 from database.users import save_user_if_new
 from database.support import (
     add_support_message,
@@ -574,102 +556,9 @@ async def select_topic(message: Message, state: FSMContext):
         f"📋 <b>{escape(title)}</b>\n\n"
         f"💰 Стоимость: {price} ₽\n\n"
         f"После оплаты вы заполните информацию о питомце.",
-        reply_markup=get_topic_pay_keyboard(key, include_tbank=tbank_acquiring_configured()),
+        reply_markup=get_topic_pay_keyboard(key),
         parse_mode="HTML",
     )
-
-
-@router.callback_query(lambda c: c.data and c.data.startswith("pay_tbank:"))
-async def pay_tbank_topic(call: CallbackQuery, state: FSMContext):
-    """MVP: создание платежа Init и ссылка на форму Т-Банка."""
-    from services.tbank import tbank_init_payment
-
-    spec_key = call.data.split(":", 1)[1]
-    if spec_key not in SPECIALISTS:
-        await call.answer("Некорректная тема", show_alert=True)
-        return
-    user_id = call.from_user.id
-    if not await user_in_client_context(user_id):
-        await call.answer("⛔", show_alert=True)
-        return
-    if not tbank_acquiring_configured():
-        await call.answer("Онлайн-оплата не настроена.", show_alert=True)
-        return
-    if not PUBLIC_WEBHOOK_BASE:
-        await call.answer("Не задан PUBLIC_WEBHOOK_BASE.", show_alert=True)
-        return
-    available = await topic_keys_available_for_client_menu()
-    if spec_key not in available:
-        await call.answer("Тема недоступна (нет врачей онлайн)", show_alert=True)
-        return
-
-    title = SPECIALISTS[spec_key]
-    price = DEFAULT_CONSULTATION_PRICE
-    anonymous_id = get_anonymous_id(spec_key, user_id)
-
-    consultation_id = await save_consultation_start(user_id, anonymous_id, None, spec_key)
-    if not consultation_id:
-        await call.answer("Сначала завершите текущую консультацию или нажмите /start.", show_alert=True)
-        return
-
-    order_id = f"v{consultation_id}-{secrets.token_hex(4)}"
-    order_id = order_id[:36]
-
-    await save_tbank_pending_payment(user_id, consultation_id, price, order_id)
-
-    notification_url = f"{PUBLIC_WEBHOOK_BASE}/tbank/notify"
-    description = f"Консультация {title}"[:140]
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            data = await tbank_init_payment(
-                amount_kopecks=price * 100,
-                order_id=order_id,
-                description=description,
-                notification_url=notification_url,
-                session=session,
-            )
-    except Exception as e:
-        await call.answer("Ошибка связи с банком", show_alert=True)
-        await safe_send_message(user_id, f"❌ Не удалось создать платёж: {escape(str(e))}")
-        return
-
-    if not data.get("Success"):
-        msg = data.get("Details") or data.get("Message") or str(data)
-        await call.answer("Банк не создал платёж", show_alert=True)
-        await safe_send_message(user_id, f"❌ Ответ Т-Банка: {escape(str(msg))}")
-        return
-
-    pay_url = data.get("PaymentURL")
-    if not pay_url:
-        await call.answer("Нет ссылки на оплату", show_alert=True)
-        return
-
-    await state.update_data(
-        problem_key=spec_key,
-        selected_problem=spec_key,
-        problem_name=title,
-        problem_price=price,
-        consultation_id=consultation_id,
-        anonymous_id=anonymous_id,
-    )
-    await state.set_state(PaymentState.waiting_confirmation)
-
-    await call.message.edit_text(
-        f"💳 <b>Оплата картой (Т-Банк)</b>\n\n"
-        f"Тема: {escape(title)}\n"
-        f"Сумма: {price} ₽\n\n"
-        f'<a href="{escape(str(pay_url), quote=True)}">Перейти к оплате</a>\n\n'
-        "После успешной оплаты откроется анкета о питомце.",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="🔗 Оплатить", url=str(pay_url))],
-                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_payment")],
-            ]
-        ),
-    )
-    await call.answer()
 
 
 @router.callback_query(lambda c: c.data and c.data.startswith("pay_topic:"))
@@ -695,12 +584,7 @@ async def pay_topic(call: CallbackQuery, state: FSMContext):
         problem_name=title,
         problem_price=price,
     )
-    pay_rows: list[list[InlineKeyboardButton]] = []
-    if tbank_acquiring_configured() and PUBLIC_WEBHOOK_BASE:
-        pay_rows.append(
-            [InlineKeyboardButton(text="💳 Онлайн (Т-Банк)", callback_data=f"pay_tbank:{spec_key}")]
-        )
-    pay_rows.append([InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid_confirm")])
+    pay_rows = [[InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid_confirm")]]
 
     await call.message.edit_text(
         f"💰 <b>Оплата консультации</b>\n\n"

@@ -46,29 +46,19 @@ def get_main_keyboard(topic_button_labels: list[str]) -> ReplyKeyboardMarkup:
 
 
 
-def get_topic_pay_keyboard(spec_key: str, *, include_tbank: bool = False) -> InlineKeyboardMarkup:
+def get_topic_pay_keyboard(spec_key: str) -> InlineKeyboardMarkup:
 
     """Оплата выбранной темы (spec_key — ключ специализации из БД)."""
 
-    rows: list[list[InlineKeyboardButton]] = []
-    if include_tbank:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="💳 Онлайн (Т-Банк)",
-                    callback_data=f"pay_tbank:{spec_key}",
-                )
-            ]
-        )
-    rows.append(
+    rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
                 text="💰 Оплатить консультацию",
                 callback_data=f"pay_topic:{spec_key}",
             )
-        ]
-    )
-    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_topics")])
+        ],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_topics")],
+    ]
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
