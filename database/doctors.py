@@ -1,6 +1,6 @@
 import logging
 import redis
-from config import REDIS_URL, INITIAL_DOCTORS, SPECIALISTS
+from config import REDIS_URL, INITIAL_DOCTORS, SPECIALISTS, SPECIALIZATION_KEYS
 from database.db import get_db
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
@@ -9,30 +9,83 @@ DOCTOR_IDS = []
 # Клиентский список «Наши врачи» и темы меню: ID ниже порога считаем тестовыми заглушками
 REAL_TELEGRAM_USER_ID_MIN = 1_000_000_000
 
+
+def ordered_spec_keys(keys: list[str]) -> list[str]:
+    """Канонический порядок ключей специализаций для отображения."""
+    if not keys:
+        return []
+    s = set(keys)
+    out = [k for k in SPECIALIZATION_KEYS if k in s]
+    for k in sorted(s):
+        if k not in out:
+            out.append(k)
+    return out
+
+
+def primary_spec_key(keys: list[str]) -> str:
+    """Первичная специализация для колонки doctors.specialization и Redis topic."""
+    for k in SPECIALIZATION_KEYS:
+        if k in keys:
+            return k
+    return sorted(keys)[0]
+
+
+def specialization_plain_title(spec_key: str | None) -> str:
+    """Название роли без ведущего эмодзи (для «Терапевт / Кардиолог»)."""
+    if not spec_key:
+        return "Не указана"
+    raw = SPECIALISTS.get(spec_key, spec_key)
+    parts = raw.split()
+    i = 0
+    while i < len(parts) and not any(ch.isalpha() for ch in parts[i]):
+        i += 1
+    return " ".join(parts[i:]) if i < len(parts) else raw
+
+
+def specializations_slash_plain(keys: list[str]) -> str:
+    return " / ".join(specialization_plain_title(k) for k in ordered_spec_keys(keys))
+
+
+async def _fetch_spec_keys_raw(telegram_id: int) -> list[str]:
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT specialization FROM doctor_specializations WHERE telegram_id = ?",
+        (telegram_id,),
+    )
+    rows = [r[0] for r in await cur.fetchall()]
+    return ordered_spec_keys(rows)
+
+
 async def load_doctors_from_db():
     """Загружает врачей из БД в память и Redis"""
     global DOCTOR_IDS
     db = await get_db()
-    cursor = await db.execute('SELECT telegram_id, specialization FROM doctors WHERE is_active = 1')
+    cursor = await db.execute(
+        "SELECT telegram_id, specialization FROM doctors WHERE is_active = 1"
+    )
     rows = await cursor.fetchall()
-    
+
     DOCTOR_IDS = []
     for row in rows:
         doctor_id, specialization = row
         DOCTOR_IDS.append(doctor_id)
         if not r.get(f"doctor:{doctor_id}:topic"):
             r.set(f"doctor:{doctor_id}:topic", specialization)
-    
+
     print(f"📋 Всего врачей в системе: {len(DOCTOR_IDS)}")
     return DOCTOR_IDS
+
 
 async def init_doctors():
     """
     Удаляет врачей-заглушек (telegram_id < REAL_TELEGRAM_USER_ID_MIN), затем
     при необходимости добавляет строки из INITIAL_DOCTORS (INSERT OR IGNORE).
-    Реальных врачей заводите через админ-панель — они хранятся в SQLite до удаления.
     """
     db = await get_db()
+    await db.execute(
+        "DELETE FROM doctor_specializations WHERE telegram_id < ?",
+        (REAL_TELEGRAM_USER_ID_MIN,),
+    )
     await db.execute(
         "DELETE FROM doctors WHERE telegram_id < ?",
         (REAL_TELEGRAM_USER_ID_MIN,),
@@ -47,6 +100,13 @@ async def init_doctors():
                 """,
                 (doc["id"], doc["name"], spec),
             )
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO doctor_specializations (telegram_id, specialization)
+                VALUES (?, ?)
+                """,
+                (doc["id"], spec),
+            )
     await db.commit()
     await load_doctors_from_db()
     logging.info(
@@ -54,37 +114,95 @@ async def init_doctors():
         len(DOCTOR_IDS),
     )
 
+
 async def get_doctor_name(doctor_id: int):
     """Возвращает имя врача по его Telegram ID"""
     db = await get_db()
-    cursor = await db.execute('SELECT name FROM doctors WHERE telegram_id = ?', (doctor_id,))
+    cursor = await db.execute(
+        "SELECT name FROM doctors WHERE telegram_id = ?", (doctor_id,)
+    )
     row = await cursor.fetchone()
     return row[0] if row else f"Врач {doctor_id}"
 
 
-async def get_doctor_specialization(doctor_id: int) -> str | None:
+async def get_doctor_spec_keys(telegram_id: int) -> list[str]:
+    """Все ключи специализаций врача (активен или нет)."""
+    keys = await _fetch_spec_keys_raw(telegram_id)
+    if keys:
+        return keys
     db = await get_db()
-    cursor = await db.execute(
-        "SELECT specialization FROM doctors WHERE telegram_id = ? AND is_active = 1",
-        (doctor_id,),
+    cur = await db.execute(
+        "SELECT specialization FROM doctors WHERE telegram_id = ?",
+        (telegram_id,),
     )
-    row = await cursor.fetchone()
-    return row[0] if row else None
+    row = await cur.fetchone()
+    if row and row[0]:
+        return [row[0]]
+    return []
+
+
+async def get_doctor_specialization(doctor_id: int) -> str | None:
+    """
+    Строка для БД/UI: «Терапевт / Кардиолог» без эмодзи.
+    """
+    keys = await get_doctor_spec_keys(doctor_id)
+    if not keys:
+        return None
+    return specializations_slash_plain(keys)
 
 
 def specialization_display_label(spec_key: str | None) -> str:
-    """Человекочитаемое название специализации по ключу из БД."""
+    """Человекочитаемое название специализации по ключу из БД (с эмодзи из словаря)."""
     if not spec_key:
         return "Не указана"
     return SPECIALISTS.get(spec_key, spec_key)
 
+
 async def get_all_doctors():
-    """Возвращает список всех активных врачей"""
+    """
+    Активные врачи: (telegram_id, name, list[spec_keys]).
+    """
     db = await get_db()
-    cursor = await db.execute('''
-        SELECT telegram_id, name, specialization FROM doctors WHERE is_active = 1
-    ''')
-    return await cursor.fetchall()
+    cur = await db.execute(
+        """
+        SELECT telegram_id, name, specialization FROM doctors
+        WHERE is_active = 1
+        ORDER BY name COLLATE NOCASE
+        """
+    )
+    rows = await cur.fetchall()
+    if not rows:
+        return []
+    tids = [r[0] for r in rows]
+    ph = ",".join("?" * len(tids))
+    cur2 = await db.execute(
+        f"SELECT telegram_id, specialization FROM doctor_specializations "
+        f"WHERE telegram_id IN ({ph})",
+        tids,
+    )
+    spec_map: dict[int, list[str]] = {t: [] for t in tids}
+    for tid, sp in await cur2.fetchall():
+        spec_map.setdefault(tid, []).append(sp)
+    out = []
+    for tid, name, legacy in rows:
+        keys = ordered_spec_keys(spec_map.get(tid, []))
+        if not keys and legacy:
+            keys = [legacy]
+        out.append((tid, name, keys))
+    return out
+
+
+async def get_doctor_admin_row(telegram_id: int) -> tuple[str, bool] | None:
+    """(name, is_active) или None."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT name, is_active FROM doctors WHERE telegram_id = ?",
+        (telegram_id,),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return None
+    return row[0], bool(row[1])
 
 
 async def get_public_doctors_for_client():
@@ -93,7 +211,18 @@ async def get_public_doctors_for_client():
     """
     rows = await get_all_doctors()
     filtered = [r for r in rows if r[0] >= REAL_TELEGRAM_USER_ID_MIN]
-    return sorted(filtered, key=lambda r: (r[2], r[1]))
+
+    def sort_key(row):
+        tid, name, keys = row
+        if not keys:
+            return (999, name.lower())
+        p = primary_spec_key(keys)
+        idx = (
+            SPECIALIZATION_KEYS.index(p) if p in SPECIALIZATION_KEYS else 999
+        )
+        return (idx, name.lower())
+
+    return sorted(filtered, key=sort_key)
 
 
 async def is_active_public_doctor(telegram_id: int) -> bool:
@@ -113,9 +242,11 @@ async def list_distinct_specializations_active() -> list[str]:
     db = await get_db()
     cursor = await db.execute(
         """
-        SELECT DISTINCT specialization FROM doctors
-        WHERE is_active = 1 AND telegram_id >= ?
-        ORDER BY specialization
+        SELECT DISTINCT ds.specialization
+        FROM doctor_specializations ds
+        INNER JOIN doctors d ON d.telegram_id = ds.telegram_id
+        WHERE d.is_active = 1 AND d.telegram_id >= ?
+        ORDER BY ds.specialization
         """,
         (REAL_TELEGRAM_USER_ID_MIN,),
     )
@@ -135,8 +266,10 @@ async def topic_keys_available_for_client_menu() -> list[str]:
     for spec in specs:
         cur = await db.execute(
             """
-            SELECT telegram_id FROM doctors
-            WHERE is_active = 1 AND specialization = ? AND telegram_id >= ?
+            SELECT ds.telegram_id
+            FROM doctor_specializations ds
+            INNER JOIN doctors d ON d.telegram_id = ds.telegram_id
+            WHERE d.is_active = 1 AND ds.specialization = ? AND d.telegram_id >= ?
             """,
             (spec, REAL_TELEGRAM_USER_ID_MIN),
         )
@@ -146,19 +279,97 @@ async def topic_keys_available_for_client_menu() -> list[str]:
                 break
     return sorted(set(keys))
 
-async def add_doctor(telegram_id: int, name: str, specialization: str):
-    """Добавляет нового врача"""
+
+async def add_doctor(
+    telegram_id: int, name: str, specializations: str | list[str]
+):
+    """Добавляет или полностью заменяет врача (имя, специализации, активен)."""
+    if isinstance(specializations, str):
+        keys = [specializations]
+    else:
+        keys = list(dict.fromkeys(specializations))
+    if not keys:
+        raise ValueError("Нужна хотя бы одна специализация")
+    keys = ordered_spec_keys(keys)
+    prim = primary_spec_key(keys)
     db = await get_db()
-    await db.execute('''
+    await db.execute(
+        """
         INSERT OR REPLACE INTO doctors (telegram_id, name, specialization, is_active)
         VALUES (?, ?, ?, 1)
-    ''', (telegram_id, name, specialization))
+        """,
+        (telegram_id, name, prim),
+    )
+    await db.execute(
+        "DELETE FROM doctor_specializations WHERE telegram_id = ?",
+        (telegram_id,),
+    )
+    for k in keys:
+        await db.execute(
+            """
+            INSERT INTO doctor_specializations (telegram_id, specialization)
+            VALUES (?, ?)
+            """,
+            (telegram_id, k),
+        )
     await db.commit()
     await load_doctors_from_db()
 
-async def remove_doctor(telegram_id: int):
-    """Удаляет врача (soft delete)"""
+
+async def update_doctor(
+    telegram_id: int,
+    *,
+    name: str | None = None,
+    specializations: list[str] | None = None,
+    is_active: bool | None = None,
+):
+    """Частичное обновление карточки врача."""
     db = await get_db()
-    await db.execute('UPDATE doctors SET is_active = 0 WHERE telegram_id = ?', (telegram_id,))
+    cur = await db.execute(
+        "SELECT 1 FROM doctors WHERE telegram_id = ?", (telegram_id,)
+    )
+    if not await cur.fetchone():
+        raise ValueError("Врач не найден")
+    if name is not None:
+        await db.execute(
+            "UPDATE doctors SET name = ? WHERE telegram_id = ?",
+            (name, telegram_id),
+        )
+    if is_active is not None:
+        await db.execute(
+            "UPDATE doctors SET is_active = ? WHERE telegram_id = ?",
+            (1 if is_active else 0, telegram_id),
+        )
+    if specializations is not None:
+        keys = ordered_spec_keys(list(dict.fromkeys(specializations)))
+        if not keys:
+            raise ValueError("Нужна хотя бы одна специализация")
+        prim = primary_spec_key(keys)
+        await db.execute(
+            "DELETE FROM doctor_specializations WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        for k in keys:
+            await db.execute(
+                """
+                INSERT INTO doctor_specializations (telegram_id, specialization)
+                VALUES (?, ?)
+                """,
+                (telegram_id, k),
+            )
+        await db.execute(
+            "UPDATE doctors SET specialization = ? WHERE telegram_id = ?",
+            (prim, telegram_id),
+        )
+    await db.commit()
+    await load_doctors_from_db()
+
+
+async def remove_doctor(telegram_id: int):
+    """Деактивирует врача (soft delete)."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE doctors SET is_active = 0 WHERE telegram_id = ?", (telegram_id,)
+    )
     await db.commit()
     await load_doctors_from_db()

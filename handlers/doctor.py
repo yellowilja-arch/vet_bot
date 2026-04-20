@@ -48,7 +48,6 @@ from database.doctors import (
     get_doctor_name,
     get_doctor_specialization,
     get_all_doctors,
-    specialization_display_label,
 )
 from utils.helpers import safe_send_message, safe_send_photo, split_text_chunks
 from keyboards.doctor import (
@@ -210,9 +209,8 @@ async def execute_take_client(
         await confirm_queue_processed(queue_id)
     await remove_from_queue("all", int(client_id))
     doctor_name = await get_doctor_name(doctor_id)
-    raw_spec = await get_doctor_specialization(doctor_id)
-    doctor_spec = raw_spec or "—"
-    spec_display = specialization_display_label(raw_spec)
+    spec_display = (await get_doctor_specialization(doctor_id)) or "—"
+    doctor_spec = spec_display
     await update_consultation_doctor(consultation_id, doctor_id, doctor_name, doctor_spec)
     set_current_client(doctor_id, client_id)
     r.set(f"client:{client_id}:doctor", str(doctor_id))
@@ -519,8 +517,11 @@ async def take_consultation_callback(call: CallbackQuery):
                 await safe_send_message(doctor_id, "🟢 Консультация активна")
 
 
-def _button_caption(name: str, spec_key: str) -> str:
-    label = f"{name} ({SPECIALISTS.get(spec_key, spec_key)})"
+def _button_caption(name: str, spec_keys: list[str]) -> str:
+    from database.doctors import specializations_slash_plain
+
+    cap = specializations_slash_plain(spec_keys) if spec_keys else "—"
+    label = f"{name} ({cap})"
     return label if len(label) <= 64 else f"{name[:50]}…"
 
 
@@ -664,8 +665,7 @@ async def redirect_ask_confirm(call: CallbackQuery):
         await call.answer("Нельзя выбрать себя.", show_alert=True)
         return
     tname = await get_doctor_name(target_tid)
-    spec = await get_doctor_specialization(target_tid) or ""
-    title = SPECIALISTS.get(spec, spec) if spec else ""
+    title = await get_doctor_specialization(target_tid) or ""
     await call.message.answer(
         f"Подтвердить перенаправление к <b>{escape(tname)}</b>"
         + (f" ({escape(title)})" if title else "")

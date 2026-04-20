@@ -16,14 +16,21 @@ from database.users import get_user_info, get_recent_users
 from database.doctors import (
     add_doctor,
     remove_doctor,
-    get_all_doctors,
+    update_doctor,
+    get_doctor_admin_row,
+    get_doctor_spec_keys,
     DOCTOR_IDS,
-    specialization_display_label,
+    ordered_spec_keys,
+    specializations_slash_plain,
 )
 from database.queue import get_queue_length, clear_queue
 from database.db import get_db, checkpoint_wal_for_backup
 from utils.helpers import safe_send_message, split_text_chunks
-from keyboards.admin import get_support_queue_keyboard, get_add_doctor_spec_keyboard
+from keyboards.admin import (
+    get_support_queue_keyboard,
+    get_doctor_multi_spec_keyboard,
+    get_edit_doctor_active_keyboard,
+)
 from data.problems import SPECIALISTS, SPECIALIZATION_KEYS
 from database.support import (
     add_support_message,
@@ -52,6 +59,7 @@ _ADMIN_MAIN_KEYBOARD_TEXTS = frozenset(
         "🚫 Заблокировать",
         "✅ Разблокировать",
         "➕ Добавить врача",
+        "✏️ Изменить врача",
         "➖ Удалить врача",
         "🔄 Сброс состояний",
         "💾 Бэкап",
@@ -68,6 +76,10 @@ _ADMIN_INTERRUPTIBLE_STATES = (
     AdminState.add_doctor_telegram,
     AdminState.add_doctor_name,
     AdminState.add_doctor_pick_spec,
+    AdminState.edit_doctor_telegram,
+    AdminState.edit_doctor_name,
+    AdminState.edit_doctor_specs,
+    AdminState.edit_doctor_active,
 )
 
 
@@ -95,25 +107,6 @@ def _stats_name_title(s: str) -> str:
     return " ".join(
         (w[:1].upper() + w[1:].lower()) if w else "" for w in s.split()
     ).strip()
-
-
-def _stats_spec_sentence_case(s: str) -> str:
-    """Специализация: префикс из эмодзи не трогаем; первое слово с букв — с заглавной, остальные строчные."""
-    parts = s.split()
-    if not parts:
-        return s
-    i = 0
-    while i < len(parts) and not any(ch.isalpha() for ch in parts[i]):
-        i += 1
-    if i >= len(parts):
-        return s
-    prefix = " ".join(parts[:i])
-    if prefix:
-        prefix += " "
-    first_w = parts[i]
-    first = first_w[:1].upper() + first_w[1:].lower()
-    rest = [p.lower() for p in parts[i + 1 :]]
-    return f"{prefix}{' '.join([first, *rest])}".strip()
 
 
 async def _reply_admin_stats(user_id: int) -> None:
@@ -183,19 +176,24 @@ async def _reply_admin_stats(user_id: int) -> None:
 
     cursor = await db.execute(
         """
-        SELECT name, specialization
-        FROM doctors
-        ORDER BY name COLLATE NOCASE ASC, id ASC
+        SELECT d.name, d.specialization, GROUP_CONCAT(ds.specialization, ',') AS spec_csv
+        FROM doctors d
+        LEFT JOIN doctor_specializations ds ON ds.telegram_id = d.telegram_id
+        GROUP BY d.id, d.name, d.specialization
+        ORDER BY d.name COLLATE NOCASE ASC
         """
     )
     all_doctor_rows = await cursor.fetchall()
     n_docs = len(all_doctor_rows)
     lines.append(f"👨‍⚕️ <b>ВРАЧИ В СИСТЕМЕ ({n_docs})</b>")
     lines.append("")
-    for dname, spec_key in all_doctor_rows:
-        spec_lbl = specialization_display_label(spec_key)
+    for dname, legacy, spec_csv in all_doctor_rows:
+        parts = [x.strip() for x in (spec_csv or "").split(",") if x.strip()]
+        keys = ordered_spec_keys(parts)
+        if not keys and legacy:
+            keys = [legacy]
         nm = _stats_name_title(str(dname or "—").strip())
-        sp = _stats_spec_sentence_case(spec_lbl.strip())
+        sp = specializations_slash_plain(keys) if keys else "—"
         lines.append(escape(f"{nm} {sp}".strip()))
 
     text = "\n".join(lines)
@@ -712,29 +710,42 @@ async def add_doctor_command(message: Message):
 
     args = message.text.split()
     if len(args) < 4:
-        await safe_send_message(user_id, "⚠️ /adddoctor <telegram_id> <имя> <specialization>")
+        await safe_send_message(
+            user_id,
+            "⚠️ /adddoctor &lt;telegram_id&gt; &lt;имя&gt; &lt;spec&gt;[,spec2,...]\n"
+            "Пример: <code>/adddoctor 123456789 Иванов терапевт,кардиолог</code>",
+            parse_mode="HTML",
+        )
         return
-    
+
     telegram_id = _parse_int(args[1])
     if telegram_id is None:
         await safe_send_message(user_id, "⚠️ telegram_id должен быть числом")
         return
     name = args[2]
-    specialization = args[3]
-    
+    specs = [s.strip() for s in args[3].split(",") if s.strip()]
+
     valid = ", ".join(SPECIALIZATION_KEYS)
-    if specialization not in SPECIALIZATION_KEYS:
-        await safe_send_message(user_id, f"❌ Неверная специализация. Доступны:\n<code>{valid}</code>", parse_mode="HTML")
+    bad = [s for s in specs if s not in SPECIALIZATION_KEYS]
+    if bad or not specs:
+        await safe_send_message(
+            user_id,
+            f"❌ Неверная специализация. Доступны:\n<code>{valid}</code>",
+            parse_mode="HTML",
+        )
         return
 
-    await add_doctor(telegram_id, name, specialization)
-    spec_label = SPECIALISTS.get(specialization, specialization)
+    await add_doctor(telegram_id, name, specs)
+    spec_line = specializations_slash_plain(specs)
     await safe_send_message(
         user_id,
-        f"✅ Врач <b>{escape(name)}</b> ({spec_label}) добавлен!",
+        f"✅ Врач <b>{escape(name)}</b> ({escape(spec_line)}) добавлен!",
         parse_mode="HTML",
     )
-    await safe_send_message(telegram_id, "👨‍⚕️ Вы добавлены в систему как врач!\nИспользуйте /start для панели управления.")
+    await safe_send_message(
+        telegram_id,
+        "👨‍⚕️ Вы добавлены в систему как врач!\nИспользуйте /start для панели управления.",
+    )
 
 
 @router.message(F.text == "➕ Добавить врача")
@@ -786,45 +797,79 @@ async def add_doctor_wizard_name(message: Message, state: FSMContext):
     if len(name) < 3:
         await safe_send_message(user_id, "⚠️ Введите не короче 3 символов или /cancel")
         return
-    await state.update_data(new_doctor_name=name)
+    await state.update_data(new_doctor_name=name, add_spec_keys=[])
     await state.set_state(AdminState.add_doctor_pick_spec)
-    await safe_send_message(
-        user_id,
-        "🏥 <b>Выберите специализацию врача:</b>",
-        reply_markup=get_add_doctor_spec_keyboard(),
+    await message.answer(
+        "🏥 <b>Выберите специализации врача</b> (можно несколько), затем «Готово»:",
+        reply_markup=get_doctor_multi_spec_keyboard(
+            set(),
+            "admnspecaddtog",
+            "admnspecadddone",
+            "admnspecaddcancel",
+        ),
         parse_mode="HTML",
     )
 
 
-@router.callback_query(StateFilter(AdminState.add_doctor_pick_spec), F.data.startswith("admnspec:"))
-async def add_doctor_wizard_spec(call: CallbackQuery, state: FSMContext):
+@router.callback_query(StateFilter(AdminState.add_doctor_pick_spec), F.data.startswith("admnspecaddtog:"))
+async def add_doctor_specs_toggle(call: CallbackQuery, state: FSMContext):
+    if not await user_in_admin_context(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+    key = call.data.split(":", 1)[1]
+    if key not in SPECIALISTS:
+        await call.answer()
+        return
+    data = await state.get_data()
+    sel = set(data.get("add_spec_keys") or [])
+    if key in sel:
+        sel.remove(key)
+    else:
+        sel.add(key)
+    await state.update_data(add_spec_keys=list(sel))
+    try:
+        await call.message.edit_reply_markup(
+            reply_markup=get_doctor_multi_spec_keyboard(
+                sel,
+                "admnspecaddtog",
+                "admnspecadddone",
+                "admnspecaddcancel",
+            ),
+        )
+    except Exception:
+        pass
+    await call.answer()
+
+
+@router.callback_query(StateFilter(AdminState.add_doctor_pick_spec), F.data == "admnspecadddone")
+async def add_doctor_specs_done(call: CallbackQuery, state: FSMContext):
     admin_id = call.from_user.id
     if not await user_in_admin_context(admin_id):
         await call.answer("⛔", show_alert=True)
         return
-    spec_key = call.data.split(":", 1)[1]
-    if spec_key not in SPECIALISTS:
-        await call.answer("Неверная специализация", show_alert=True)
-        return
     data = await state.get_data()
     tid = data.get("new_doctor_tid")
     name = data.get("new_doctor_name")
+    keys = ordered_spec_keys(list(data.get("add_spec_keys") or []))
     if not tid or not name:
         await state.clear()
-        await call.answer("Сессия сброшена, начните снова", show_alert=True)
+        await call.answer("Сессия сброшена", show_alert=True)
         return
-    await add_doctor(tid, name, spec_key)
+    if not keys:
+        await call.answer("Выберите хотя бы одну специализацию", show_alert=True)
+        return
+    await add_doctor(tid, name, keys)
     await state.clear()
-    spec_label = SPECIALISTS[spec_key]
+    spec_line = specializations_slash_plain(keys)
     try:
         await call.message.edit_text(
-            f"✅ Врач <b>{escape(name)}</b> ({spec_label}) добавлен!",
+            f"✅ Врач <b>{escape(name)}</b> ({escape(spec_line)}) добавлен!",
             parse_mode="HTML",
         )
     except Exception:
         await safe_send_message(
             admin_id,
-            f"✅ Врач <b>{escape(name)}</b> ({spec_label}) добавлен!",
+            f"✅ Врач <b>{escape(name)}</b> ({escape(spec_line)}) добавлен!",
             parse_mode="HTML",
         )
     await call.answer()
@@ -834,7 +879,7 @@ async def add_doctor_wizard_spec(call: CallbackQuery, state: FSMContext):
     )
 
 
-@router.callback_query(StateFilter(AdminState.add_doctor_pick_spec), F.data == "admnspec_cancel")
+@router.callback_query(StateFilter(AdminState.add_doctor_pick_spec), F.data == "admnspecaddcancel")
 async def add_doctor_wizard_cancel_cb(call: CallbackQuery, state: FSMContext):
     await state.clear()
     await call.answer("Отменено")
@@ -850,7 +895,210 @@ async def add_doctor_wizard_remind_inline(message: Message):
         return
     await safe_send_message(
         message.from_user.id,
-        "Выберите специализацию кнопкой выше или отправьте /cancel.",
+        "Выберите специализации кнопками выше или отправьте /cancel.",
+    )
+
+
+@router.message(F.text == "✏️ Изменить врача")
+async def edit_doctor_wizard_start(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    await state.set_state(AdminState.edit_doctor_telegram)
+    await safe_send_message(
+        user_id,
+        "✏️ <b>Редактирование врача</b>\n\nВведите Telegram ID врача:",
+        parse_mode="HTML",
+    )
+
+
+@router.message(AdminState.edit_doctor_telegram, F.text)
+async def edit_doctor_wizard_tid(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    raw = (message.text or "").strip()
+    if raw.startswith("/"):
+        await state.clear()
+        raise SkipHandler()
+    if not raw.lstrip("-").isdigit():
+        await safe_send_message(user_id, "⚠️ Отправьте числовой Telegram ID или /cancel")
+        return
+    tid = int(raw)
+    row = await get_doctor_admin_row(tid)
+    if not row:
+        await safe_send_message(user_id, "❌ Врач с таким ID не найден в базе.")
+        return
+    name, is_act = row
+    keys = await get_doctor_spec_keys(tid)
+    await state.update_data(
+        edit_tid=tid,
+        edit_original_name=name,
+        edit_was_active=is_act,
+        edit_spec_keys=list(keys),
+    )
+    await state.set_state(AdminState.edit_doctor_name)
+    await safe_send_message(
+        user_id,
+        f"Текущее ФИО: <b>{escape(name)}</b>\n\n"
+        "Введите новое ФИО или отправьте «—», чтобы оставить без изменений.",
+        parse_mode="HTML",
+    )
+
+
+@router.message(AdminState.edit_doctor_name, F.text)
+async def edit_doctor_wizard_name(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not await user_in_admin_context(user_id):
+        return
+    raw = (message.text or "").strip()
+    if raw in ("—", "-", "–"):
+        await state.update_data(edit_keep_name=True, edit_new_name=None)
+    else:
+        if len(raw) < 3:
+            await safe_send_message(user_id, "⚠️ Не короче 3 символов или отправьте «—»")
+            return
+        await state.update_data(edit_keep_name=False, edit_new_name=raw)
+    data = await state.get_data()
+    sel = set(data.get("edit_spec_keys") or [])
+    await state.set_state(AdminState.edit_doctor_specs)
+    await message.answer(
+        "Отметьте специализации (можно несколько), затем «Готово»:",
+        reply_markup=get_doctor_multi_spec_keyboard(
+            sel,
+            "admnspecedittog",
+            "admnspeceditdone",
+            "admnspeceditcancel",
+        ),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(StateFilter(AdminState.edit_doctor_specs), F.data.startswith("admnspecedittog:"))
+async def edit_doctor_specs_toggle(call: CallbackQuery, state: FSMContext):
+    if not await user_in_admin_context(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+    key = call.data.split(":", 1)[1]
+    if key not in SPECIALISTS:
+        await call.answer()
+        return
+    data = await state.get_data()
+    sel = set(data.get("edit_spec_keys") or [])
+    if key in sel:
+        sel.remove(key)
+    else:
+        sel.add(key)
+    await state.update_data(edit_spec_keys=list(sel))
+    try:
+        await call.message.edit_reply_markup(
+            reply_markup=get_doctor_multi_spec_keyboard(
+                sel,
+                "admnspecedittog",
+                "admnspeceditdone",
+                "admnspeceditcancel",
+            ),
+        )
+    except Exception:
+        pass
+    await call.answer()
+
+
+@router.callback_query(StateFilter(AdminState.edit_doctor_specs), F.data == "admnspeceditdone")
+async def edit_doctor_specs_done(call: CallbackQuery, state: FSMContext):
+    if not await user_in_admin_context(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+    data = await state.get_data()
+    keys = ordered_spec_keys(list(data.get("edit_spec_keys") or []))
+    if not keys:
+        await call.answer("Нужна хотя бы одна специализация", show_alert=True)
+        return
+    await state.update_data(edit_spec_keys=list(keys))
+    was = bool(data.get("edit_was_active"))
+    await state.set_state(AdminState.edit_doctor_active)
+    try:
+        await call.message.edit_text(
+            "Выберите статус врача в системе:\n\n"
+            f"Сейчас: {'🟢 активен' if was else '🔴 не активен'}",
+            reply_markup=get_edit_doctor_active_keyboard(),
+        )
+    except Exception:
+        await call.message.answer(
+            "Выберите статус врача в системе:\n\n"
+            f"Сейчас: {'🟢 активен' if was else '🔴 не активен'}",
+            reply_markup=get_edit_doctor_active_keyboard(),
+        )
+    await call.answer()
+
+
+@router.callback_query(StateFilter(AdminState.edit_doctor_specs), F.data == "admnspeceditcancel")
+async def edit_doctor_specs_cancel(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.answer("Отменено")
+    try:
+        await call.message.edit_text("❌ Редактирование отменено.")
+    except Exception:
+        pass
+
+
+@router.callback_query(StateFilter(AdminState.edit_doctor_active), F.data.startswith("admndoeditact:"))
+async def edit_doctor_apply(call: CallbackQuery, state: FSMContext):
+    admin_id = call.from_user.id
+    if not await user_in_admin_context(admin_id):
+        await call.answer("⛔", show_alert=True)
+        return
+    data = await state.get_data()
+    tid = data.get("edit_tid")
+    specs = ordered_spec_keys(list(data.get("edit_spec_keys") or []))
+    if not tid or not specs:
+        await state.clear()
+        await call.answer("Сессия устарела", show_alert=True)
+        return
+    is_active = call.data.endswith(":1")
+    kwargs: dict = {"specializations": specs, "is_active": is_active}
+    if not data.get("edit_keep_name"):
+        nn = data.get("edit_new_name")
+        if nn:
+            kwargs["name"] = nn
+    try:
+        await update_doctor(tid, **kwargs)
+    except ValueError as e:
+        await call.answer(str(e), show_alert=True)
+        return
+    await state.clear()
+    spec_line = specializations_slash_plain(specs)
+    try:
+        await call.message.edit_text(
+            f"✅ Врач <code>{tid}</code> обновлён: <b>{escape(spec_line)}</b>, "
+            f"{'активен' if is_active else 'не активен'}.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        await safe_send_message(
+            admin_id,
+            f"✅ Врач {tid} обновлён: {spec_line}, {'активен' if is_active else 'не активен'}.",
+        )
+    await call.answer()
+
+
+@router.message(AdminState.edit_doctor_active)
+async def edit_doctor_active_remind(message: Message):
+    if not await user_in_admin_context(message.from_user.id):
+        return
+    await safe_send_message(
+        message.from_user.id,
+        "Нажмите «Активен» или «Не активен» на кнопках выше, либо /cancel.",
+    )
+
+
+@router.message(AdminState.edit_doctor_specs)
+async def edit_doctor_specs_remind(message: Message):
+    if not await user_in_admin_context(message.from_user.id):
+        return
+    await safe_send_message(
+        message.from_user.id,
+        "Используйте инлайн-кнопки выше или /cancel.",
     )
 
 

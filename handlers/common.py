@@ -5,7 +5,6 @@ from aiogram.types import Message, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from config import REDIS_URL, ADMIN_IDS
 from services.validators import is_blocked, is_doctor, is_admin, get_doctor_status, get_current_client, set_doctor_status, update_doctor_activity
-from database.doctors import get_all_doctors
 from database.queue import get_queue_length
 from database.users import save_user_if_new
 from utils.helpers import safe_send_message, safe_send_photo, get_anonymous_id

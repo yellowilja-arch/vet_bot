@@ -61,7 +61,30 @@ async def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
+
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS doctor_specializations (
+            telegram_id INTEGER NOT NULL,
+            specialization TEXT NOT NULL,
+            PRIMARY KEY (telegram_id, specialization)
+        )
+    ''')
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_doctor_specializations_spec "
+        "ON doctor_specializations(specialization)"
+    )
+    try:
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO doctor_specializations (telegram_id, specialization)
+            SELECT telegram_id, specialization FROM doctors
+            WHERE specialization IS NOT NULL AND TRIM(specialization) != ''
+            """
+        )
+        await db.commit()
+    except Exception as e:
+        logging.warning("doctor_specializations backfill: %s", e)
+
     # Консультации
     await db.execute('''
         CREATE TABLE IF NOT EXISTS consultations (

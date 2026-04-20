@@ -35,6 +35,7 @@ from database.doctors import (
     topic_keys_available_for_client_menu,
     get_public_doctors_for_client,
     is_active_public_doctor,
+    specializations_slash_plain,
 )
 from database.consultations import (
     save_consultation_start,
@@ -111,13 +112,13 @@ async def _build_our_doctors_message_and_keyboard():
         return None, None
     lines_body = ["👨‍⚕️ <b>НАШИ ВРАЧИ</b>\n", "Выберите специалиста:\n"]
     btn_rows: list[tuple[int, str]] = []
-    for telegram_id, name, spec_key in db_rows:
-        spec_title = SPECIALISTS.get(spec_key, spec_key)
+    for telegram_id, name, spec_keys in db_rows:
+        spec_title = specializations_slash_plain(spec_keys) if spec_keys else "—"
         sym = get_doctor_status_symbol(telegram_id)
         busy_note = ""
         if get_doctor_status(telegram_id) == "online" and get_current_client(telegram_id):
             busy_note = " (в консультации)"
-        lines_body.append(f"{sym} {spec_title} — {escape(name)}{busy_note}")
+        lines_body.append(f"{sym} {escape(spec_title)} — {escape(name)}{busy_note}")
         btn_rows.append((telegram_id, f"{sym} {spec_title} — {name}"))
     lines_body.append("")
     lines_body.append("<i>🟢 — свободен · 🔴 — в консультации · ⚪ — не в сети</i>")
@@ -1099,7 +1100,7 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
             notified_doctors.add(assigned_id)
     else:
         for row in await get_all_doctors():
-            doctor_tid = row[0]
+            doctor_tid = int(row[0])
             sent = await safe_send_message(
                 doctor_tid,
                 vet_message,

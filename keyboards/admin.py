@@ -10,7 +10,8 @@ def get_admin_main_keyboard():
             [KeyboardButton(text="📬 Обращения"), KeyboardButton(text="📊 Статистика")],
             [KeyboardButton(text="🩺 Здоровье"), KeyboardButton(text="🚫 Заблокировать")],
             [KeyboardButton(text="✅ Разблокировать"), KeyboardButton(text="➕ Добавить врача")],
-            [KeyboardButton(text="➖ Удалить врача"), KeyboardButton(text="🔄 Сброс состояний")],
+            [KeyboardButton(text="✏️ Изменить врача"), KeyboardButton(text="➖ Удалить врача")],
+            [KeyboardButton(text="🔄 Сброс состояний")],
             [KeyboardButton(text="💾 Бэкап")],
         ],
         resize_keyboard=True
@@ -64,18 +65,44 @@ def get_support_queue_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def get_add_doctor_spec_keyboard() -> InlineKeyboardMarkup:
-    """Инлайн-выбор специализации при добавлении врача (3 кнопки в ряд)."""
+def get_doctor_multi_spec_keyboard(
+    selected: set[str],
+    toggle_prefix: str,
+    done_data: str,
+    cancel_data: str,
+) -> InlineKeyboardMarkup:
+    """Мультивыбор специализаций (toggle_prefix:key, готово/отмена)."""
     specs = [(k, SPECIALISTS[k]) for k in SPECIALIZATION_KEYS if k in SPECIALISTS]
     rows: list = []
     row: list = []
-    for _key, title in specs:
-        short = title if len(title) <= 20 else title[:17] + "…"
-        row.append(InlineKeyboardButton(text=short, callback_data=f"admnspec:{_key}"))
-        if len(row) == 3:
+    for key, title in specs:
+        mark = "✓ " if key in selected else ""
+        short = mark + (title if len(title) <= 18 else title[:15] + "…")
+        if len(short) > 64:
+            short = short[:61] + "…"
+        row.append(
+            InlineKeyboardButton(text=short, callback_data=f"{toggle_prefix}:{key}")
+        )
+        if len(row) == 2:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="admnspec_cancel")])
+    rows.append(
+        [
+            InlineKeyboardButton(text="✅ Готово", callback_data=done_data),
+            InlineKeyboardButton(text="❌ Отмена", callback_data=cancel_data),
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_edit_doctor_active_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🟢 Активен", callback_data="admndoeditact:1"),
+                InlineKeyboardButton(text="🔴 Не активен", callback_data="admndoeditact:0"),
+            ],
+        ]
+    )

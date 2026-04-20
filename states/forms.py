@@ -44,4 +44,8 @@ class AdminState(StatesGroup):
     waiting_resetall_confirm = State()  # Reply: подтверждение /resetall
     add_doctor_telegram = State()   # Шаг 1: Telegram ID нового врача
     add_doctor_name = State()       # Шаг 2: ФИО
-    add_doctor_pick_spec = State()  # Шаг 3: выбор специализации (callback)
+    add_doctor_pick_spec = State()  # Шаг 3: мультивыбор специализаций (callback)
+    edit_doctor_telegram = State()
+    edit_doctor_name = State()
+    edit_doctor_specs = State()
+    edit_doctor_active = State()
