@@ -14,8 +14,22 @@ ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "1092230808").split(
 SUPPORT_TEMPLATE_TEXT = os.getenv("SUPPORT_TEMPLATE_TEXT", "Какой у Вас вопрос/проблема?")
 PHONE_NUMBER = os.getenv("PHONE_NUMBER", "+79256530940")
 
-# Railway PORT
+# Railway PORT (HTTP: health + вебхук Т-Банка)
 PORT = int(os.getenv("PORT", 8080))
+
+# ============================================
+# Т-БАНК — интернет-эквайринг (вебхук + Init)
+# ============================================
+# Публичный URL без пути, например https://your-app.up.railway.app
+PUBLIC_WEBHOOK_BASE = (os.getenv("PUBLIC_WEBHOOK_BASE") or "").strip().rstrip("/")
+TBANK_TERMINAL_KEY = (os.getenv("TBANK_TERMINAL_KEY") or "").strip()
+TBANK_PASSWORD = (os.getenv("TBANK_PASSWORD") or "").strip()
+# Прод: https://securepay.tinkoff.ru/v2 — тестовый терминал: см. кабинет Т-Банка
+TBANK_API_BASE = (os.getenv("TBANK_API_BASE") or "https://securepay.tinkoff.ru/v2").strip().rstrip("/")
+
+
+def tbank_acquiring_configured() -> bool:
+    return bool(TBANK_TERMINAL_KEY and TBANK_PASSWORD and PUBLIC_WEBHOOK_BASE)
 
 # ============================================
 # YANDEX CLOUD (БЭКАПЫ)
@@ -90,3 +104,17 @@ INITIAL_DOCTORS = {
 
 # Глобальный список ID врачей (заполняется при загрузке)
 DOCTOR_IDS = []
+
+# --- Если в деплой попала старая копия config без блока Т-Банка выше, задаём имена из env ---
+if "PUBLIC_WEBHOOK_BASE" not in globals():
+    PUBLIC_WEBHOOK_BASE = (os.getenv("PUBLIC_WEBHOOK_BASE") or "").strip().rstrip("/")
+if "TBANK_TERMINAL_KEY" not in globals():
+    TBANK_TERMINAL_KEY = (os.getenv("TBANK_TERMINAL_KEY") or "").strip()
+if "TBANK_PASSWORD" not in globals():
+    TBANK_PASSWORD = (os.getenv("TBANK_PASSWORD") or "").strip()
+if "TBANK_API_BASE" not in globals():
+    TBANK_API_BASE = (os.getenv("TBANK_API_BASE") or "https://securepay.tinkoff.ru/v2").strip().rstrip("/")
+if "tbank_acquiring_configured" not in globals():
+
+    def tbank_acquiring_configured() -> bool:
+        return bool(TBANK_TERMINAL_KEY and TBANK_PASSWORD and PUBLIC_WEBHOOK_BASE)
