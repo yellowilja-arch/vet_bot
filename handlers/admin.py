@@ -1,4 +1,5 @@
 from aiogram import Router, F
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command, StateFilter
 from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.fsm.context import FSMContext
@@ -16,7 +17,11 @@ from database.doctors import add_doctor, remove_doctor, get_all_doctors, DOCTOR_
 from database.queue import get_queue_length, clear_queue
 from database.db import get_db, checkpoint_wal_for_backup
 from utils.helpers import safe_send_message, split_text_chunks
-from keyboards.admin import get_support_queue_keyboard, get_add_doctor_spec_keyboard
+from keyboards.admin import (
+    get_support_queue_keyboard,
+    get_add_doctor_spec_keyboard,
+    ADMIN_MAIN_KEYBOARD_TEXTS,
+)
 from data.problems import SPECIALISTS, SPECIALIZATION_KEYS
 from database.support import (
     add_support_message,
@@ -35,6 +40,18 @@ from datetime import datetime
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
 router = Router()
+
+# FSM мастеров админки: не перехватывать произвольный текст до общих хендлеров /cancel и «прервать по меню»
+_ADMIN_INTERRUPTIBLE_STATES = (
+    AdminState.waiting_ban_user_id,
+    AdminState.waiting_ban_reason,
+    AdminState.waiting_unban_user_id,
+    AdminState.waiting_remove_doctor_id,
+    AdminState.waiting_resetall_confirm,
+    AdminState.add_doctor_telegram,
+    AdminState.add_doctor_name,
+    AdminState.add_doctor_pick_spec,
+)
 
 
 def _parse_int(value: str):
@@ -434,6 +451,39 @@ async def reset_all_confirm(message: Message, state: FSMContext):
     await safe_send_message(user_id, "✅ Все состояния сброшены")
 
 
+@router.message(
+    Command("cancel"),
+    StateFilter(*_ADMIN_INTERRUPTIBLE_STATES),
+)
+async def admin_reply_keyboard_flow_cancel(message: Message, state: FSMContext):
+    """/cancel должен обрабатываться раньше шагов «введите ID», иначе /cancel парсится как невалидный ID."""
+    if not await user_in_admin_context(message.from_user.id):
+        return
+    await state.clear()
+    await safe_send_message(message.from_user.id, "❌ Действие отменено.")
+
+
+@router.message(StateFilter(*_ADMIN_INTERRUPTIBLE_STATES), F.text)
+async def admin_fsm_yield_menu_and_commands(message: Message, state: FSMContext):
+    """
+    Во время мастера: команды (/stats, /admin, …) и кнопки панели сбрасывают FSM и передают апдейт дальше.
+    Иначе текст «📊 Статистика» попадает в «ожидаем числовой ID».
+    """
+    if not await user_in_admin_context(message.from_user.id):
+        raise SkipHandler()
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        cmd = text.split()[0].split("@")[0].lower()
+        if cmd == "/cancel":
+            raise SkipHandler()
+        await state.clear()
+        raise SkipHandler()
+    if text in ADMIN_MAIN_KEYBOARD_TEXTS:
+        await state.clear()
+        raise SkipHandler()
+    raise SkipHandler()
+
+
 @router.message(F.text == "🚫 Заблокировать")
 async def ban_button(message: Message, state: FSMContext):
     user_id = message.from_user.id
@@ -558,23 +608,6 @@ async def remove_doctor_receive_id(message: Message, state: FSMContext):
     await safe_send_message(user_id, f"✅ Врач {tid} удалён из системы")
 
 
-@router.message(
-    Command("cancel"),
-    StateFilter(
-        AdminState.waiting_ban_user_id,
-        AdminState.waiting_ban_reason,
-        AdminState.waiting_unban_user_id,
-        AdminState.waiting_remove_doctor_id,
-        AdminState.waiting_resetall_confirm,
-    ),
-)
-async def admin_reply_keyboard_flow_cancel(message: Message, state: FSMContext):
-    if not await user_in_admin_context(message.from_user.id):
-        return
-    await state.clear()
-    await safe_send_message(message.from_user.id, "❌ Действие отменено.")
-
-
 @router.message(Command("closestuck"))
 async def close_stuck(message: Message):
     user_id = message.from_user.id
@@ -640,21 +673,6 @@ async def add_doctor_wizard_start(message: Message, state: FSMContext):
         "Целое число ( можно узнать у врача или через @userinfobot )",
         parse_mode="HTML",
     )
-
-
-@router.message(
-    StateFilter(
-        AdminState.add_doctor_telegram,
-        AdminState.add_doctor_name,
-        AdminState.add_doctor_pick_spec,
-    ),
-    Command("cancel"),
-)
-async def add_doctor_wizard_cancel_cmd(message: Message, state: FSMContext):
-    if not await user_in_admin_context(message.from_user.id):
-        return
-    await state.clear()
-    await safe_send_message(message.from_user.id, "❌ Добавление врача отменено.")
 
 
 @router.message(AdminState.add_doctor_telegram)

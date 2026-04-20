@@ -61,6 +61,26 @@ from states.forms import QuestionnaireState
 router = Router()
 
 
+async def _edit_message_or_ignore_not_modified(
+    call: CallbackQuery,
+    text: str,
+    *,
+    reply_markup=None,
+    parse_mode: str | None = None,
+) -> None:
+    """Telegram возвращает 400, если текст и клавиатура совпадают с текущими — не считаем это ошибкой."""
+    try:
+        kwargs = {"reply_markup": reply_markup}
+        if parse_mode is not None:
+            kwargs["parse_mode"] = parse_mode
+        await call.message.edit_text(text, **kwargs)
+    except TelegramBadRequest as e:
+        err = (e.message or str(e)).lower()
+        if "message is not modified" in err or "not modified" in err:
+            return
+        raise
+
+
 async def _end_active_consultation(doctor_id: int, client_id: int) -> None:
     """Завершение консультации врачом (рейтинг, очистка Redis)."""
     from database.db import get_db
@@ -710,7 +730,9 @@ async def doctor_online_callback(call: CallbackQuery):
         await call.answer("⛔ Только для врачей")
         return
     set_doctor_status(doctor_id, "online")
-    await call.message.edit_text("🟢 Вы стали онлайн.", reply_markup=get_doctor_main_keyboard())
+    await _edit_message_or_ignore_not_modified(
+        call, "🟢 Вы стали онлайн.", reply_markup=get_doctor_main_keyboard()
+    )
     await call.answer()
 
 
@@ -721,7 +743,9 @@ async def doctor_offline_callback(call: CallbackQuery):
         await call.answer("⛔ Только для врачей")
         return
     set_doctor_status(doctor_id, "offline")
-    await call.message.edit_text("🔴 Вы стали офлайн.", reply_markup=get_doctor_main_keyboard())
+    await _edit_message_or_ignore_not_modified(
+        call, "🔴 Вы стали офлайн.", reply_markup=get_doctor_main_keyboard()
+    )
     await call.answer()
 
 
@@ -759,7 +783,9 @@ async def show_status_callback(call: CallbackQuery):
     text += f"👤 Текущий клиент: {current or 'нет'}\n📋 Очередь: {queue_len}"
     
     has_client = current is not None
-    await call.message.edit_text(text, reply_markup=get_doctor_status_keyboard(has_client))
+    await _edit_message_or_ignore_not_modified(
+        call, text, reply_markup=get_doctor_status_keyboard(has_client)
+    )
     await call.answer()
 
 
