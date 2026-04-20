@@ -18,6 +18,8 @@ class QuestionnaireState(StatesGroup):
     waiting_condition = State()    # Упитанность
     waiting_chronic = State()      # Хронические заболевания
     waiting_recent_illness = State()  # Болезни за последний месяц
+    waiting_vaccination = State()  # Комплексная вакцинация
+    waiting_sterilization = State()  # Кастрация / стерилизация
 
 
 class WaitingState(StatesGroup):
@@ -36,6 +38,10 @@ class AdminState(StatesGroup):
     waiting_user_id = State()      # Ожидание ID пользователя
     waiting_doctor_id = State()    # Ожидание ID врача
     waiting_ban_reason = State()   # Причина блокировки
+    waiting_ban_user_id = State()  # Reply: блокировка — шаг ID
+    waiting_unban_user_id = State()  # Reply: разблокировка — ID
+    waiting_remove_doctor_id = State()  # Reply: удалить врача — telegram id
+    waiting_resetall_confirm = State()  # Reply: подтверждение /resetall
     add_doctor_telegram = State()   # Шаг 1: Telegram ID нового врача
     add_doctor_name = State()       # Шаг 2: ФИО
     add_doctor_pick_spec = State()  # Шаг 3: выбор специализации (callback)
