@@ -21,12 +21,65 @@ REAL_TELEGRAM_USER_ID_MIN = 1
 # При старте удаляем только явные числовые заглушки из старых сидов (не реальные аккаунты).
 DOCTOR_STUB_TELEGRAM_ID_MAX = 99
 
+# Частые опечатки / старые значения (в т.ч. из ручного jsonbin) → канонический ключ из SPECIALISTS.
+SPECIALIZATION_KEY_ALIASES: dict[str, str] = {
+    "therapy": "therapist",
+    "therapies": "therapist",
+    "terapevt": "therapist",
+    "gp_doctor": "gp",
+    "general": "gp",
+    "practitioner": "gp",
+    "cardio": "cardiologist",
+    "oncology": "oncologist",
+    "gastro": "gastroenterologist",
+    "ortho": "orthopedist",
+    "orthopaedic": "orthopedist",
+    "surgery": "surgeon",
+    "nephro": "nephrologist",
+    "neuro": "neurologist",
+    "derma": "dermatologist",
+    "repro": "reproductologist",
+    "virus": "virologist",
+    "radiology": "radiologist",
+    "visual": "radiologist",
+}
+
+
+def canonical_specialization_key(raw: str | None) -> str | None:
+    """Приводит строку из БД к ключу из SPECIALISTS (кроме universal_triage)."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    if s == UNIVERSAL_TOPIC_KEY:
+        return None
+    norm = s.lower().replace(" ", "_").replace("-", "_")
+    if norm == UNIVERSAL_TOPIC_KEY:
+        return None
+    if norm in SPECIALIZATION_KEY_ALIASES:
+        cand = SPECIALIZATION_KEY_ALIASES[norm]
+        if cand in SPECIALISTS and cand != UNIVERSAL_TOPIC_KEY:
+            return cand
+    if s in SPECIALISTS and s != UNIVERSAL_TOPIC_KEY:
+        return s
+    if norm in SPECIALISTS and norm != UNIVERSAL_TOPIC_KEY:
+        return norm
+    return None
+
 
 def ordered_spec_keys(keys: list[str]) -> list[str]:
     """Канонический порядок ключей специализаций для отображения."""
     if not keys:
         return []
-    s = set(keys)
+    normalized: list[str] = []
+    for x in keys:
+        c = canonical_specialization_key(x)
+        if c:
+            normalized.append(c)
+    if not normalized:
+        return []
+    s = set(normalized)
     out = [k for k in SPECIALIZATION_KEYS if k in s]
     for k in sorted(s):
         if k not in out:
@@ -88,6 +141,54 @@ async def load_doctors_from_db():
     return DOCTOR_IDS
 
 
+async def repair_specialization_keys_in_db() -> None:
+    """
+    Перезаписывает doctor_specializations и поле doctors.specialization каноническими ключами.
+    Нужно после импорта jsonbin или если в БД попали опечатки — иначе темы клиентского меню пустые.
+    """
+    db = await get_db()
+    cur = await db.execute("SELECT telegram_id, specialization FROM doctors")
+    doctors_rows = await cur.fetchall()
+    fixed = 0
+    for tid, legacy_sp in doctors_rows:
+        tid = int(tid)
+        cur2 = await db.execute(
+            "SELECT specialization FROM doctor_specializations WHERE telegram_id = ?",
+            (tid,),
+        )
+        raw = [r[0] for r in await cur2.fetchall()]
+        if not raw and legacy_sp and str(legacy_sp).strip():
+            raw = [legacy_sp]
+        canon: list[str] = []
+        seen: set[str] = set()
+        for x in raw:
+            c = canonical_specialization_key(x)
+            if c and c not in seen:
+                seen.add(c)
+                canon.append(c)
+        await db.execute("DELETE FROM doctor_specializations WHERE telegram_id = ?", (tid,))
+        for c in canon:
+            await db.execute(
+                "INSERT INTO doctor_specializations (telegram_id, specialization) VALUES (?, ?)",
+                (tid, c),
+            )
+        if canon:
+            prim = primary_spec_key(ordered_spec_keys(canon))
+            await db.execute(
+                "UPDATE doctors SET specialization = ? WHERE telegram_id = ?",
+                (prim, tid),
+            )
+            fixed += 1
+        elif raw:
+            logging.warning(
+                "repair DB: telegram_id=%s — специализации не распознаны (задайте ключи как в админке): %r",
+                tid,
+                raw,
+            )
+    await db.commit()
+    logging.info("repair_specialization_keys_in_db: врачей с валидными спеками: %s", fixed)
+
+
 async def init_doctors():
     """
     Удаляет врачей-заглушек с малоцифровыми ID, затем при необходимости сидит INITIAL_DOCTORS.
@@ -119,6 +220,7 @@ async def init_doctors():
                 (doc["id"], spec),
             )
     await db.commit()
+    await repair_specialization_keys_in_db()
     await load_doctors_from_db()
     logging.info(
         "Врачи в БД после init_doctors: %s (INITIAL_DOCTORS задаёт только опциональный сид)",
@@ -272,7 +374,16 @@ async def list_distinct_specializations_active() -> list[str]:
         """,
         (REAL_TELEGRAM_USER_ID_MIN, REAL_TELEGRAM_USER_ID_MIN),
     )
-    return [row[0] for row in await cursor.fetchall()]
+    raw_specs = [row[0] for row in await cursor.fetchall()]
+    seen: set[str] = set()
+    out: list[str] = []
+    for spec in raw_specs:
+        c = canonical_specialization_key(spec)
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+    out.sort()
+    return out
 
 
 async def is_universal_topic_menu_available() -> bool:
@@ -293,7 +404,7 @@ async def topic_keys_available_for_client_menu() -> list[str]:
     db_specs = set(await list_distinct_specializations_active())
     ordered = [k for k in SPECIALIZATION_KEYS if k in db_specs]
     for k in sorted(db_specs):
-        if k not in ordered:
+        if k in SPECIALISTS and k != UNIVERSAL_TOPIC_KEY and k not in ordered:
             ordered.append(k)
     if await is_universal_topic_menu_available():
         ordered.append(UNIVERSAL_TOPIC_KEY)
@@ -347,6 +458,8 @@ async def add_doctor(
     if not keys:
         raise ValueError("Нужна хотя бы одна специализация")
     keys = ordered_spec_keys(keys)
+    if not keys:
+        raise ValueError("Специализации не распознаны — используйте те же ключи, что в панели админа")
     prim = primary_spec_key(keys)
     db = await get_db()
     await db.execute(
@@ -402,7 +515,9 @@ async def update_doctor(
     if specializations is not None:
         keys = ordered_spec_keys(list(dict.fromkeys(specializations)))
         if not keys:
-            raise ValueError("Нужна хотя бы одна специализация")
+            raise ValueError(
+                "Специализации не распознаны — используйте те же ключи, что в панели админа"
+            )
         prim = primary_spec_key(keys)
         await db.execute(
             "DELETE FROM doctor_specializations WHERE telegram_id = ?",

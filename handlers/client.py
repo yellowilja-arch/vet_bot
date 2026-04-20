@@ -106,7 +106,7 @@ def _spec_key_from_menu_label(text: str | None) -> str | None:
 async def client_main_menu_keyboard() -> ReplyKeyboardMarkup:
     """Reply-клавиатура: темы из БД (есть онлайн-врач по специализации)."""
     keys = await topic_keys_available_for_client_menu()
-    labels = [SPECIALISTS[k] for k in keys]
+    labels = [SPECIALISTS[k] for k in keys if k in SPECIALISTS]
     return get_main_keyboard(labels)
 
 

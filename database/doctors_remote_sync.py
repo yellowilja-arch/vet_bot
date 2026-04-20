@@ -150,7 +150,7 @@ async def export_doctors_for_sync() -> list[dict[str, Any]]:
         tid_i = int(tid)
         keys = ordered_spec_keys(spec_map.get(tid_i, []))
         if not keys and legacy:
-            keys = [str(legacy)]
+            keys = ordered_spec_keys([str(legacy)])
         if not keys:
             continue
         out.append(
@@ -237,8 +237,9 @@ async def pull_doctors_from_remote() -> None:
     except Exception as e:
         logger.error("DOCTORS_SYNC: ошибка записи в SQLite: %s", e, exc_info=True)
         return
-    from database.doctors import load_doctors_from_db
+    from database.doctors import load_doctors_from_db, repair_specialization_keys_in_db
 
+    await repair_specialization_keys_in_db()
     await load_doctors_from_db()
     logger.info("DOCTORS_SYNC: импортировано врачей из HTTP: %s", len(rows))
 
