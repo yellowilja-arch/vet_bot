@@ -13,8 +13,13 @@ from database.db import get_db
 r = redis.from_url(REDIS_URL, decode_responses=True)
 DOCTOR_IDS = []
 
-# Клиентский список «Наши врачи» и темы меню: ID ниже порога считаем тестовыми заглушками
-REAL_TELEGRAM_USER_ID_MIN = 1_000_000_000
+# Минимальный Telegram ID для участия в меню, маршрутизации и публичных списках.
+# Не используйте 1e9: у большинства аккаунтов ID — 9 цифр и он МЕНЬШЕ 1_000_000_000,
+# тогда темы клиенту не показывались, хотя врач в БД был.
+REAL_TELEGRAM_USER_ID_MIN = 1
+
+# При старте удаляем только явные числовые заглушки из старых сидов (не реальные аккаунты).
+DOCTOR_STUB_TELEGRAM_ID_MAX = 99
 
 
 def ordered_spec_keys(keys: list[str]) -> list[str]:
@@ -85,17 +90,16 @@ async def load_doctors_from_db():
 
 async def init_doctors():
     """
-    Удаляет врачей-заглушек (telegram_id < REAL_TELEGRAM_USER_ID_MIN), затем
-    при необходимости добавляет строки из INITIAL_DOCTORS (INSERT OR IGNORE).
+    Удаляет врачей-заглушек с малоцифровыми ID, затем при необходимости сидит INITIAL_DOCTORS.
     """
     db = await get_db()
     await db.execute(
-        "DELETE FROM doctor_specializations WHERE telegram_id < ?",
-        (REAL_TELEGRAM_USER_ID_MIN,),
+        "DELETE FROM doctor_specializations WHERE telegram_id <= ?",
+        (DOCTOR_STUB_TELEGRAM_ID_MAX,),
     )
     await db.execute(
-        "DELETE FROM doctors WHERE telegram_id < ?",
-        (REAL_TELEGRAM_USER_ID_MIN,),
+        "DELETE FROM doctors WHERE telegram_id <= ?",
+        (DOCTOR_STUB_TELEGRAM_ID_MAX,),
     )
     await db.commit()
     for spec, doctors in INITIAL_DOCTORS.items():
@@ -245,17 +249,28 @@ async def is_active_public_doctor(telegram_id: int) -> bool:
 
 
 async def list_distinct_specializations_active() -> list[str]:
-    """Специализации с хотя бы одним активным «реальным» врачём (для тем в меню)."""
+    """Специализации с хотя бы одним активным врачём (для тем в меню)."""
     db = await get_db()
     cursor = await db.execute(
         """
-        SELECT DISTINCT ds.specialization
-        FROM doctor_specializations ds
-        INNER JOIN doctors d ON d.telegram_id = ds.telegram_id
-        WHERE d.is_active = 1 AND d.telegram_id >= ?
-        ORDER BY ds.specialization
+        SELECT DISTINCT x.spec
+        FROM (
+            SELECT ds.specialization AS spec
+            FROM doctor_specializations ds
+            INNER JOIN doctors d ON d.telegram_id = ds.telegram_id
+            WHERE d.is_active = 1 AND d.telegram_id >= ?
+            UNION
+            SELECT d.specialization AS spec
+            FROM doctors d
+            WHERE d.is_active = 1 AND d.telegram_id >= ?
+              AND TRIM(COALESCE(d.specialization, '')) != ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM doctor_specializations z WHERE z.telegram_id = d.telegram_id
+              )
+        ) AS x
+        ORDER BY x.spec
         """,
-        (REAL_TELEGRAM_USER_ID_MIN,),
+        (REAL_TELEGRAM_USER_ID_MIN, REAL_TELEGRAM_USER_ID_MIN),
     )
     return [row[0] for row in await cursor.fetchall()]
 

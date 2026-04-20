@@ -22,10 +22,9 @@ from config import (
     DOCTORS_SYNC_PUSH_URL,
 )
 from database.db import get_db
+from database.doctors import REAL_TELEGRAM_USER_ID_MIN
 
 logger = logging.getLogger(__name__)
-
-REAL_MIN = 1_000_000_000
 
 
 def _sync_headers() -> dict[str, str]:
@@ -65,7 +64,7 @@ def _normalize_payload(data: Any) -> list[dict[str, Any]]:
             tid_i = int(tid)
         except (TypeError, ValueError):
             continue
-        if tid_i < REAL_MIN:
+        if tid_i < REAL_TELEGRAM_USER_ID_MIN:
             continue
         name = item.get("name")
         if name is None or str(name).strip() == "":
@@ -101,7 +100,7 @@ async def export_doctors_for_sync() -> list[dict[str, Any]]:
         WHERE telegram_id >= ?
         ORDER BY telegram_id
         """,
-        (REAL_MIN,),
+        (REAL_TELEGRAM_USER_ID_MIN,),
     )
     rows = await cur.fetchall()
     if not rows:
