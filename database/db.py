@@ -1,4 +1,5 @@
 import asyncio
+import os
 import aiosqlite
 import logging
 from config import DB_PATH
@@ -6,10 +7,20 @@ from config import DB_PATH
 _db_pool = None
 _db_lock = asyncio.Lock()
 
+
+def _ensure_db_parent_dir() -> None:
+    """Создаёт каталог для файла БД (например /data на Railway Volume)."""
+    abs_path = os.path.abspath(DB_PATH)
+    parent = os.path.dirname(abs_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
 async def get_db():
     global _db_pool
     async with _db_lock:
         if _db_pool is None:
+            _ensure_db_parent_dir()
             _db_pool = await aiosqlite.connect(DB_PATH)
             await _db_pool.execute("PRAGMA journal_mode=WAL")
             await _db_pool.execute("PRAGMA busy_timeout=5000")
@@ -18,10 +29,29 @@ async def get_db():
                 await _db_pool.execute("SELECT 1")
             except:
                 logging.error("Database connection lost, reconnecting...")
+                _ensure_db_parent_dir()
                 _db_pool = await aiosqlite.connect(DB_PATH)
                 await _db_pool.execute("PRAGMA journal_mode=WAL")
                 await _db_pool.execute("PRAGMA busy_timeout=5000")
         return _db_pool
+
+
+async def close_db_connection() -> None:
+    """Закрывает SQLite и сбрасывает WAL — перед остановкой процесса (Railway SIGTERM)."""
+    global _db_pool
+    async with _db_lock:
+        if _db_pool is None:
+            return
+        try:
+            await _db_pool.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            await _db_pool.commit()
+        except Exception as e:
+            logging.warning("SQLite checkpoint при закрытии: %s", e)
+        try:
+            await _db_pool.close()
+        except Exception as e:
+            logging.warning("SQLite close: %s", e)
+        _db_pool = None
 
 
 async def checkpoint_wal_for_backup() -> None:

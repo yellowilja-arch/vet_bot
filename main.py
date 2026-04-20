@@ -7,7 +7,8 @@ from aiogram.fsm.storage.redis import RedisStorage
 import redis.asyncio as redis_async
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.types import ErrorEvent
-from config import BOT_TOKEN, ADMIN_IDS, REDIS_URL
+import os
+from config import BOT_TOKEN, ADMIN_IDS, REDIS_URL, DB_PATH
 from handlers import register_handlers
 from services.bot_commands import default_scope_commands
 from workers.backups import backup_worker
@@ -45,16 +46,30 @@ async def global_error_handler(event: ErrorEvent):
 async def init_startup():
     """Инициализация при старте: БД, врачи, сессии"""
     from database.db import init_db
-    from database.doctors import init_doctors, load_doctors_from_db
+    from database.doctors import init_doctors
     
     logging.info("🚀 Инициализирую БД и врачей...")
-    
+    logging.info("📂 SQLite путь: %s", os.path.abspath(DB_PATH))
+    if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_NAME"):
+        logging.info(
+            "Railway: данные сохраняются между редеплоями только если этот путь на смонтированном Volume "
+            "(часто /data). Проверьте настройки тома в панели Railway."
+        )
+        from config import DOCTORS_SYNC_PULL_URL
+
+        if DOCTORS_SYNC_PULL_URL:
+            logging.info(
+                "Задан DOCTORS_SYNC_PULL_URL — список врачей будет подтягиваться из HTTP после старта БД."
+            )
+
     # Инициализация БД
     await init_db()
     
     # Инициализация врачей
     await init_doctors()
-    await load_doctors_from_db()
+    from database.doctors_remote_sync import pull_doctors_from_remote
+
+    await pull_doctors_from_remote()
     
     # Восстановление активных консультаций
     import redis
@@ -105,6 +120,18 @@ async def main():
 
 async def shutdown():
     logging.info("Завершение работы...")
+    try:
+        from database.doctors_remote_sync import push_doctors_to_remote
+
+        await push_doctors_to_remote()
+    except Exception as e:
+        logging.warning("DOCTORS_SYNC: финальная выгрузка не удалась: %s", e)
+    try:
+        from database.db import close_db_connection
+
+        await close_db_connection()
+    except Exception as e:
+        logging.warning("Не удалось корректно закрыть SQLite: %s", e)
     await redis_client.aclose()
     await bot.session.close()
     sys.exit(0)

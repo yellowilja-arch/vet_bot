@@ -355,6 +355,9 @@ async def add_doctor(
         )
     await db.commit()
     await load_doctors_from_db()
+    from database.doctors_remote_sync import schedule_push_doctors_remote
+
+    schedule_push_doctors_remote()
 
 
 async def update_doctor(
@@ -404,6 +407,9 @@ async def update_doctor(
         )
     await db.commit()
     await load_doctors_from_db()
+    from database.doctors_remote_sync import schedule_push_doctors_remote
+
+    schedule_push_doctors_remote()
 
 
 async def remove_doctor(telegram_id: int):
@@ -414,3 +420,6 @@ async def remove_doctor(telegram_id: int):
     )
     await db.commit()
     await load_doctors_from_db()
+    from database.doctors_remote_sync import schedule_push_doctors_remote
+
+    schedule_push_doctors_remote()

@@ -53,10 +53,42 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 # ============================================
 # SQLite
 # ============================================
-# Без постоянного тома на PaaS (Railway и т.п.) файл БД и vet_bot.db-wal / -shm
-# создаются заново при деплое — счётчики пользователей/консультаций обнуляются.
-# Задайте DB_PATH на смонтированный диск или используйте внешнюю БД.
-DB_PATH = os.getenv("DB_PATH", "vet_bot.db")
+# На Railway файловая система контейнера эфемерна: без тома vet_bot.db в корне
+# проекта обнуляется при каждом редеплое (пропадают врачи и прочие данные).
+#
+# Рекомендация: в проекте Railway добавьте Volume, смонтируйте его в /data и
+# либо не задавайте DB_PATH (ниже сработает путь по умолчанию для Railway),
+# либо явно: DB_PATH=/data/vet_bot.db
+def _resolve_sqlite_path() -> str:
+    explicit = (os.getenv("DB_PATH") or "").strip()
+    if explicit:
+        return explicit
+    if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_NAME"):
+        if os.name == "nt":
+            return "vet_bot.db"
+        return "/data/vet_bot.db"
+    return "vet_bot.db"
+
+
+DB_PATH = _resolve_sqlite_path()
+
+# ============================================
+# Врачи: синхронизация по HTTP (без Volume на PaaS)
+# ============================================
+# При деплое контейнер часто получает пустой SQLite. Альтернатива тому — хранить
+# JSON со списком врачей во внешнем хранилище с HTTP API.
+#
+# Пример (jsonbin.io): создайте bin с начальным значением [].
+#   DOCTORS_SYNC_PULL_URL=https://api.jsonbin.io/v3/b/<BIN_ID>/latest
+#   DOCTORS_SYNC_PUSH_URL=https://api.jsonbin.io/v3/b/<BIN_ID>
+#   DOCTORS_SYNC_PUSH_METHOD=PUT
+#   DOCTORS_SYNC_HTTP_HEADERS={"X-Master-Key":"<ваш ключ>"}
+#
+# Ответ GET может быть массивом или обёрткой {"record":[...]} / {"doctors":[...]}.
+DOCTORS_SYNC_PULL_URL = (os.getenv("DOCTORS_SYNC_PULL_URL") or "").strip()
+DOCTORS_SYNC_PUSH_URL = (os.getenv("DOCTORS_SYNC_PUSH_URL") or "").strip()
+DOCTORS_SYNC_HTTP_HEADERS = (os.getenv("DOCTORS_SYNC_HTTP_HEADERS") or "").strip()
+DOCTORS_SYNC_PUSH_METHOD = (os.getenv("DOCTORS_SYNC_PUSH_METHOD") or "PUT").strip().upper()
 
 # ============================================
 # НАСТРОЙКИ ТАЙМАУТОВ
