@@ -1,6 +1,13 @@
 import logging
 import redis
-from config import REDIS_URL, INITIAL_DOCTORS, SPECIALISTS, SPECIALIZATION_KEYS
+from config import (
+    REDIS_URL,
+    INITIAL_DOCTORS,
+    SPECIALISTS,
+    SPECIALIZATION_KEYS,
+    UNIVERSAL_TOPIC_DOCTOR_ID,
+)
+from data.problems import UNIVERSAL_TOPIC_KEY
 from database.db import get_db
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
@@ -253,31 +260,65 @@ async def list_distinct_specializations_active() -> list[str]:
     return [row[0] for row in await cursor.fetchall()]
 
 
+async def is_universal_topic_menu_available() -> bool:
+    """Кнопка универсальной темы, если назначенный врач есть в БД и активен."""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT 1 FROM doctors WHERE telegram_id = ? AND is_active = 1",
+        (UNIVERSAL_TOPIC_DOCTOR_ID,),
+    )
+    return await cur.fetchone() is not None
+
+
 async def topic_keys_available_for_client_menu() -> list[str]:
     """
-    Темы для клиента: специализация видна только если есть ≥1 активный врач
-    по этой специализации в статусе online.
+    Темы главного меню: специализация видна, если есть ≥1 активный врач
+    (онлайн/офлайн не важно). Плюс универсальная тема при доступности врача.
     """
+    db_specs = set(await list_distinct_specializations_active())
+    ordered = [k for k in SPECIALIZATION_KEYS if k in db_specs]
+    for k in sorted(db_specs):
+        if k not in ordered:
+            ordered.append(k)
+    if await is_universal_topic_menu_available():
+        ordered.append(UNIVERSAL_TOPIC_KEY)
+    return ordered
+
+
+async def list_active_doctor_ids_for_specialization(spec_key: str) -> list[int]:
+    """Активные «реальные» врачи с данной специализацией."""
+    db = await get_db()
+    cur = await db.execute(
+        """
+        SELECT ds.telegram_id
+        FROM doctor_specializations ds
+        INNER JOIN doctors d ON d.telegram_id = ds.telegram_id
+        WHERE d.is_active = 1 AND ds.specialization = ? AND d.telegram_id >= ?
+        ORDER BY ds.telegram_id
+        """,
+        (spec_key, REAL_TELEGRAM_USER_ID_MIN),
+    )
+    return [int(r[0]) for r in await cur.fetchall()]
+
+
+async def list_online_doctor_ids_for_specialization(spec_key: str) -> list[int]:
+    """Врачи по специализации, которые сейчас online (при сбое Redis — пусто)."""
     from services.validators import get_doctor_status
 
-    specs = await list_distinct_specializations_active()
-    keys: list[str] = []
-    db = await get_db()
-    for spec in specs:
-        cur = await db.execute(
-            """
-            SELECT ds.telegram_id
-            FROM doctor_specializations ds
-            INNER JOIN doctors d ON d.telegram_id = ds.telegram_id
-            WHERE d.is_active = 1 AND ds.specialization = ? AND d.telegram_id >= ?
-            """,
-            (spec, REAL_TELEGRAM_USER_ID_MIN),
-        )
-        for (tid,) in await cur.fetchall():
+    out: list[int] = []
+    for tid in await list_active_doctor_ids_for_specialization(spec_key):
+        try:
             if get_doctor_status(tid) == "online":
-                keys.append(spec)
-                break
-    return sorted(set(keys))
+                out.append(tid)
+        except Exception:
+            continue
+    return out
+
+
+async def get_first_active_doctor_id_for_topic(topic_key: str) -> int | None:
+    """Первый активный врач по теме (офлайн-закрепление)."""
+    ids = await list_active_doctor_ids_for_specialization(topic_key)
+    return ids[0] if ids else None
 
 
 async def add_doctor(

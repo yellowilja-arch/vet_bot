@@ -16,7 +16,7 @@ def get_main_keyboard(topic_button_labels: list[str]) -> ReplyKeyboardMarkup:
 
     Главное меню клиента: только темы (подписи из SPECIALISTS) + сервисные кнопки.
 
-    topic_button_labels — список подписей для активных тем (есть онлайн-врач).
+    topic_button_labels — подписи тем (есть активные врачи в клинике).
 
     """
 
@@ -323,7 +323,24 @@ def get_our_doctors_inline_keyboard(lines: list[tuple[int, str]]) -> InlineKeybo
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-
+def get_topic_doctors_pick_keyboard(
+    spec_key: str, lines: list[tuple[int, str]]
+) -> InlineKeyboardMarkup:
+    """Выбор врача после темы: lines — (telegram_id, подпись кнопки)."""
+    rows = []
+    for tid, label in lines:
+        short = label if len(label) <= 58 else label[:55] + "…"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=short, callback_data=f"topicdoc:{tid}:{spec_key}"
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_topics")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def get_doctor_free_pay_keyboard(doctor_id: int) -> InlineKeyboardMarkup:

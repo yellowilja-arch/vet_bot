@@ -50,13 +50,28 @@ def get_current_client(doctor_id):
     return r.get(f"doctor:{doctor_id}:current_client")
 
 
+def safe_get_doctor_status(doctor_id) -> str:
+    """Статус врача; при сбое Redis — offline (не роняем оплату/чек)."""
+    try:
+        return get_doctor_status(doctor_id)
+    except Exception:
+        return "offline"
+
+
+def safe_get_current_client(doctor_id):
+    try:
+        return get_current_client(doctor_id)
+    except Exception:
+        return None
+
+
 def get_doctor_status_symbol(doctor_id: int) -> str:
     """
     Статус для отображения клиенту:
     🟢 — онлайн и свободен, 🔴 — онлайн, ведёт консультацию, ⚪ — офлайн.
     """
-    if get_doctor_status(doctor_id) == "online":
-        if get_current_client(doctor_id):
+    if safe_get_doctor_status(doctor_id) == "online":
+        if safe_get_current_client(doctor_id):
             return "🔴"
         return "🟢"
     return "⚪"

@@ -134,13 +134,9 @@ async def get_consultation_problem_key(consultation_id: int) -> str | None:
     return row[0] if row else None
 
 
-async def assign_pending_doctor_from_topic(consultation_id: int, topic_key: str) -> int | None:
-    """Первичное закрепление врача по теме (после чека). Возвращает telegram_id врача или None."""
-    from services.routing import pick_doctor_for_topic
-
-    tid = await pick_doctor_for_topic(topic_key)
-    if not tid:
-        return None
+async def _write_pending_doctor_assignment(
+    consultation_id: int, tid: int, topic_key: str
+) -> None:
     name = await get_doctor_name(tid)
     spec = await get_doctor_specialization(tid) or topic_key
     db = await get_db()
@@ -154,7 +150,40 @@ async def assign_pending_doctor_from_topic(consultation_id: int, topic_key: str)
             (tid, name, spec, consultation_id),
         )
         await db.commit()
-    return tid
+
+
+async def assign_pending_doctor_from_topic(consultation_id: int, topic_key: str) -> int | None:
+    """
+    Закрепление врача после чека: онлайн (round-robin) / универсальная тема /
+    иначе первый активный по теме (офлайн, 24 ч).
+    """
+    from config import UNIVERSAL_TOPIC_DOCTOR_ID
+    from data.problems import UNIVERSAL_TOPIC_KEY
+    from database.doctors import get_first_active_doctor_id_for_topic
+    from services.routing import pick_doctor_for_topic
+    from services.validators import get_doctor_status
+
+    if topic_key == UNIVERSAL_TOPIC_KEY:
+        tid = UNIVERSAL_TOPIC_DOCTOR_ID
+        await _write_pending_doctor_assignment(consultation_id, tid, topic_key)
+        try:
+            if get_doctor_status(tid) != "online":
+                await set_consultation_offline_intake(consultation_id)
+        except Exception:
+            await set_consultation_offline_intake(consultation_id)
+        return tid
+
+    tid = await pick_doctor_for_topic(topic_key)
+    if tid:
+        await _write_pending_doctor_assignment(consultation_id, tid, topic_key)
+        return tid
+
+    first = await get_first_active_doctor_id_for_topic(topic_key)
+    if not first:
+        return None
+    await _write_pending_doctor_assignment(consultation_id, first, topic_key)
+    await set_consultation_offline_intake(consultation_id)
+    return first
 
 
 async def assign_pending_doctor_direct(consultation_id: int, doctor_telegram_id: int) -> None:

@@ -1,3 +1,4 @@
+import logging
 import redis
 from config import REDIS_URL, DOCTORS
 from database.db import get_db
@@ -26,17 +27,32 @@ async def pick_doctor_for_topic(topic_key: str) -> int | None:
     tids = [row[0] for row in await cur.fetchall()]
     if not tids:
         return None
-    online = [t for t in tids if get_doctor_status(t) == "online"]
-    if not online:
-        return None
-    free = [t for t in online if get_current_client(t) is None]
-    pool = free if free else online
-    pool = sorted(pool)
-    rr_key = f"rr_topic:{topic_key}"
-    idx = int(r.get(rr_key) or 0)
-    chosen = pool[idx % len(pool)]
-    r.set(rr_key, idx + 1)
-    return chosen
+    try:
+        online = [t for t in tids if get_doctor_status(t) == "online"]
+        if not online:
+            return None
+        free = [t for t in online if get_current_client(t) is None]
+        pool = free if free else online
+        pool = sorted(pool)
+        rr_key = f"rr_topic:{topic_key}"
+        idx = int(r.get(rr_key) or 0)
+        chosen = pool[idx % len(pool)]
+        r.set(rr_key, idx + 1)
+        return chosen
+    except (redis.ConnectionError, OSError, TimeoutError) as e:
+        logging.warning(
+            "Redis недоступен при выборе врача по теме %s, берём первого из БД: %s",
+            topic_key,
+            e,
+        )
+        return sorted(tids)[0]
+    except Exception as e:
+        logging.warning(
+            "Сбой Redis/статусов при выборе врача по теме %s, берём первого из БД: %s",
+            topic_key,
+            e,
+        )
+        return sorted(tids)[0]
 
 
 def get_doctor_by_specialization(specialization: str):

@@ -1,6 +1,9 @@
 # data/problems.py
 
-# 12 специализаций: id → отображаемое название (эмодзи + роль)
+# Универсальная тема (не в SPECIALIZATION_KEYS — нельзя выбрать как специализацию врача в админке)
+UNIVERSAL_TOPIC_KEY = "universal_triage"
+
+# Специализации: id → отображаемое название (эмодзи + роль)
 SPECIALISTS = {
     "gp": "🩺 Врач общей практики",
     "therapist": "👨‍⚕️ Терапевт",
@@ -15,6 +18,7 @@ SPECIALISTS = {
     "reproductologist": "🤰 Репродуктолог",
     "virologist": "🦠 Вирусолог",
     "radiologist": "📷 Врач визуальной диагностики",
+    UNIVERSAL_TOPIC_KEY: "❓ Не знаю, куда/к кому обратиться",
 }
 
 # Порядок кнопок выбора специализации (админ / отображение списков)
@@ -572,6 +576,14 @@ PROBLEMS = {
         "name": "📋 Консультация с выбранным врачом",
         "category": "specialist",
         "description": "Запись к конкретному специалисту (раздел «Наши врачи»)",
+        "price": 500,
+        "specialists": [],
+        "urgent": False,
+    },
+    UNIVERSAL_TOPIC_KEY: {
+        "name": "❓ Не знаю, куда/к кому обратиться",
+        "category": "specialist",
+        "description": "Общая консультация, подбор направления",
         "price": 500,
         "specialists": [],
         "urgent": False,
