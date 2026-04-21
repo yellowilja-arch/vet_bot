@@ -43,6 +43,7 @@ class AdminState(StatesGroup):
     waiting_unban_user_id = State()  # Reply: разблокировка — ID
     waiting_remove_doctor_id = State()  # Reply: удалить врача — telegram id
     waiting_resetall_confirm = State()  # Reply: подтверждение /resetall
+    waiting_resetuser_id = State()  # Reply: ID после /resetuser без аргумента
     add_doctor_telegram = State()   # Шаг 1: Telegram ID нового врача
     add_doctor_name = State()       # Шаг 2: ФИО
     add_doctor_pick_spec = State()  # Шаг 3: мультивыбор специализаций (callback)
