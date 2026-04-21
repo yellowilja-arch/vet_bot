@@ -337,6 +337,17 @@ async def _run_ddl(db: _PgConnectionFacade) -> None:
         except Exception as e:
             logging.warning("ALTER (миграция колонки): %s", e)
 
+    try:
+        await db.execute(
+            "UPDATE doctor_specializations SET specialization = 'therapist' WHERE specialization = 'gp'"
+        )
+        await db.execute(
+            "UPDATE doctors SET specialization = 'therapist' WHERE specialization = 'gp'"
+        )
+        await db.commit()
+    except Exception as e:
+        logging.warning("Миграция gp → therapist: %s", e)
+
     await db.execute(
         """
         INSERT INTO doctor_specializations (telegram_id, specialization)

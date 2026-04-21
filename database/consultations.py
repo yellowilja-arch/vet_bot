@@ -173,17 +173,29 @@ async def assign_pending_doctor_from_topic(consultation_id: int, topic_key: str)
             await set_consultation_offline_intake(consultation_id)
         return tid
 
-    tid = await pick_doctor_for_topic(topic_key)
-    if tid:
-        await _write_pending_doctor_assignment(consultation_id, tid, topic_key)
-        return tid
+    from data.problems import PROBLEMS
 
-    first = await get_first_active_doctor_id_for_topic(topic_key)
-    if not first:
-        return None
-    await _write_pending_doctor_assignment(consultation_id, first, topic_key)
-    await set_consultation_offline_intake(consultation_id)
-    return first
+    def _routing_specs(menu_key: str) -> list[str]:
+        pdata = PROBLEMS.get(menu_key)
+        if pdata is not None:
+            specs = pdata.get("specialists") or []
+            return specs if specs else ["therapist"]
+        return [menu_key]
+
+    specs = _routing_specs(topic_key)
+    for spec in specs:
+        tid = await pick_doctor_for_topic(spec)
+        if tid:
+            await _write_pending_doctor_assignment(consultation_id, tid, spec)
+            return tid
+
+    for spec in specs:
+        first = await get_first_active_doctor_id_for_topic(spec)
+        if first:
+            await _write_pending_doctor_assignment(consultation_id, first, spec)
+            await set_consultation_offline_intake(consultation_id)
+            return first
+    return None
 
 
 async def assign_pending_doctor_direct(consultation_id: int, doctor_telegram_id: int) -> None:
