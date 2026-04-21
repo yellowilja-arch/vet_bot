@@ -129,6 +129,39 @@ async def persist_all_doctors_offline_in_db() -> None:
     await db.commit()
 
 
+async def reconcile_online_presence_from_db(telegram_ids: list[int]) -> None:
+    """
+    Подтянуть Redis из БД, если врач помечен онлайн в PostgreSQL, а в Redis ещё нет/офлайн.
+    Не трогаем случай «Redis online, БД offline» (persist мог не успеть).
+    """
+    if not telegram_ids:
+        return
+    ids = sorted({int(x) for x in telegram_ids})
+    from services.validators import get_doctor_status, set_doctor_status
+
+    db = await get_db()
+    ph = ",".join("?" * len(ids))
+    cur = await db.execute(
+        f"""
+        SELECT telegram_id, COALESCE(presence_status, 'offline')
+        FROM doctors
+        WHERE telegram_id IN ({ph}) AND is_active IS TRUE
+        """,
+        ids,
+    )
+    rows = await cur.fetchall()
+    for row in rows:
+        tid = int(row[0])
+        db_online = str(row[1]).strip().lower() == "online"
+        if not db_online:
+            continue
+        if get_doctor_status(tid) != "online":
+            set_doctor_status(tid, "online")
+            logging.info(
+                "presence: Redis синхронизирован с БД для telegram_id=%s (online)", tid
+            )
+
+
 async def load_doctors_from_db():
     """Загружает врачей из БД в память и Redis (тема + статус присутствия из БД)."""
     global DOCTOR_IDS
@@ -450,8 +483,10 @@ async def list_online_doctor_ids_for_specialization(spec_key: str) -> list[int]:
     """Врачи по специализации, которые сейчас online (при сбое Redis — пусто)."""
     from services.validators import get_doctor_status
 
+    tids = await list_active_doctor_ids_for_specialization(spec_key)
+    await reconcile_online_presence_from_db(tids)
     out: list[int] = []
-    for tid in await list_active_doctor_ids_for_specialization(spec_key):
+    for tid in tids:
         try:
             if get_doctor_status(tid) == "online":
                 out.append(tid)
