@@ -68,7 +68,6 @@ from keyboards.client import (
     get_rating_keyboard,
     get_recent_illness_keyboard,
     get_vaccination_keyboard,
-    get_sterilization_keyboard,
     get_support_keyboard,
     get_waiting_keyboard,
     get_back_keyboard,
@@ -1176,32 +1175,20 @@ async def _send_vaccination_step(chat_id: int, state: FSMContext) -> None:
     await state.set_state(QuestionnaireState.waiting_vaccination)
     await safe_send_message(
         chat_id,
-        "💉 <b>Была ли проведена комплексная вакцинация?</b>\n\n"
+        "💉 <b>Комплексная вакцинация</b>\n\n"
+        "Была ли проведена комплексная вакцинация питомца?\n\n"
         "Комплексная вакцинация защищает от основных заболеваний:\n"
-        "собаки — чума, парвовирус, аденовирус, лептоспироз\n"
-        "кошки — ринотрахеит, калицивироз, панлейкопения",
+        "• Собаки — чума, парвовирус, аденовирус, лептоспироз\n"
+        "• Кошки — ринотрахеит, калицивироз, панлейкопения",
         reply_markup=get_vaccination_keyboard(),
         parse_mode="HTML",
     )
 
 
-async def _send_sterilization_step(chat_id: int, state: FSMContext) -> None:
-    await state.set_state(QuestionnaireState.waiting_sterilization)
-    await safe_send_message(
-        chat_id,
-        "✂️ <b>Проведена ли кастрация / стерилизация?</b>\n\n"
-        "Кастрация — удаление семенников (самцы)\n"
-        "Стерилизация — удаление матки и яичников (самки)",
-        reply_markup=get_sterilization_keyboard(),
-        parse_mode="HTML",
-    )
+_VAC_MAP = {"vac_yes": "Да", "vac_no": "Нет", "vac_unknown": "Не знаю"}
 
 
-_VAC_MAP = {"vac:yes": "Да", "vac:no": "Нет", "vac:unk": "Не знаю"}
-_STER_MAP = {"ster:yes": "Да", "ster:no": "Нет", "ster:unk": "Не знаю"}
-
-
-@router.callback_query(lambda c: c.data and c.data.startswith("vac:"))
+@router.callback_query(lambda c: c.data in _VAC_MAP)
 async def vaccination_chosen(call: CallbackQuery, state: FSMContext):
     if await state.get_state() != QuestionnaireState.waiting_vaccination.state:
         await call.answer()
@@ -1211,24 +1198,6 @@ async def vaccination_chosen(call: CallbackQuery, state: FSMContext):
         await call.answer()
         return
     await state.update_data(vaccination=label)
-    await call.answer()
-    try:
-        await call.message.delete()
-    except Exception:
-        pass
-    await _send_sterilization_step(call.message.chat.id, state)
-
-
-@router.callback_query(lambda c: c.data and c.data.startswith("ster:"))
-async def sterilization_chosen(call: CallbackQuery, state: FSMContext):
-    if await state.get_state() != QuestionnaireState.waiting_sterilization.state:
-        await call.answer()
-        return
-    label = _STER_MAP.get(call.data)
-    if not label:
-        await call.answer()
-        return
-    await state.update_data(sterilization=label)
     await call.answer()
     try:
         await call.message.delete()
@@ -1273,7 +1242,6 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
     chronic = data.get("chronic", "Не указано")
     recent_illness = data.get("recent_illness", "Не указано")
     vaccination = data.get("vaccination", "Не указано")
-    sterilization = data.get("sterilization", "Не указано")
     consultation_id = data.get("consultation_id")
     anonymous_id = data.get("anonymous_id", "anon")
     if not consultation_id:
@@ -1306,7 +1274,7 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
         chronic,
         recent_illness,
         vaccination,
-        sterilization,
+        None,
         consultation_id,
     ))
     await db.commit()
@@ -1337,7 +1305,6 @@ async def send_pet_info_to_doctor(message: Message, state: FSMContext):
         f"💊 Хронические заболевания: {escape(str(chronic))}\n"
         f"🩺 Болезни за последний месяц: {escape(str(recent_illness))}\n"
         f"💉 Комплексная вакцинация: {escape(str(vaccination))}\n"
-        f"✂️ Кастрация/стерилизация: {escape(str(sterilization))}\n"
     )
 
     doc_row = await get_consultation_doctor_and_topic(consultation_id)
