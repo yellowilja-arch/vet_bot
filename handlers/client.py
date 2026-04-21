@@ -202,13 +202,14 @@ async def _build_our_doctors_message_and_keyboard():
     lines_body = ["👨‍⚕️ <b>НАШИ ВРАЧИ</b>\n", "Выберите специалиста:\n"]
     btn_rows: list[tuple[int, str]] = []
     for telegram_id, name, spec_keys in db_rows:
+        tid = int(telegram_id)
         spec_title = specializations_slash_plain(spec_keys) if spec_keys else "—"
-        sym = get_doctor_status_symbol(telegram_id)
+        sym = get_doctor_status_symbol(tid)
         busy_note = ""
-        if get_doctor_status(telegram_id) == "online" and get_current_client(telegram_id):
+        if get_doctor_status(tid) == "online" and get_current_client(tid):
             busy_note = " (в консультации)"
         lines_body.append(f"{sym} {escape(spec_title)} — {escape(name)}{busy_note}")
-        btn_rows.append((telegram_id, f"{sym} {spec_title} — {name}"))
+        btn_rows.append((tid, f"{sym} {spec_title} — {name}"))
     lines_body.append("")
     lines_body.append("<i>🟢 — свободен · 🔴 — в консультации · ⚪ — не в сети</i>")
     text = "\n".join(lines_body)

@@ -17,6 +17,7 @@ from services.validators import (
     get_doctor_status,
     get_current_client,
     set_doctor_status,
+    persist_doctor_presence_to_db,
     set_current_client,
     update_doctor_activity,
     clear_session,
@@ -305,6 +306,7 @@ async def go_online(message: Message):
     user_id = message.from_user.id
     if await user_in_doctor_context(user_id):
         set_doctor_status(user_id, "online")
+        await persist_doctor_presence_to_db(user_id, "online")
         await safe_send_message(user_id, "🟢 Вы онлайн", reply_markup=get_doctor_main_keyboard())
         await notify_doctor_offline_pending_on_login(user_id)
 
@@ -314,6 +316,7 @@ async def go_offline(message: Message):
     user_id = message.from_user.id
     if await user_in_doctor_context(user_id):
         set_doctor_status(user_id, "offline")
+        await persist_doctor_presence_to_db(user_id, "offline")
         await safe_send_message(user_id, "🔴 Вы офлайн", reply_markup=get_doctor_main_keyboard())
 
 
@@ -827,6 +830,7 @@ async def doctor_online_callback(call: CallbackQuery):
         await call.answer("⛔ Только для врачей")
         return
     set_doctor_status(doctor_id, "online")
+    await persist_doctor_presence_to_db(doctor_id, "online")
     await _edit_message_or_ignore_not_modified(
         call, "🟢 Вы стали онлайн.", reply_markup=get_doctor_main_keyboard()
     )
@@ -841,6 +845,7 @@ async def doctor_offline_callback(call: CallbackQuery):
         await call.answer("⛔ Только для врачей")
         return
     set_doctor_status(doctor_id, "offline")
+    await persist_doctor_presence_to_db(doctor_id, "offline")
     await _edit_message_or_ignore_not_modified(
         call, "🔴 Вы стали офлайн.", reply_markup=get_doctor_main_keyboard()
     )
