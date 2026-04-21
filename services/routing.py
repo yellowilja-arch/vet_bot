@@ -2,7 +2,7 @@ import logging
 import redis
 from config import REDIS_URL, DOCTORS
 from database.db import get_db
-from database.doctors import REAL_TELEGRAM_USER_ID_MIN
+from database.doctors import REAL_TELEGRAM_USER_ID_MIN, reconcile_online_presence_from_db
 from services.validators import get_doctor_status, get_current_client
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
@@ -24,9 +24,10 @@ async def pick_doctor_for_topic(topic_key: str) -> int | None:
         """,
         (topic_key, REAL_TELEGRAM_USER_ID_MIN),
     )
-    tids = [row[0] for row in await cur.fetchall()]
+    tids = [int(row[0]) for row in await cur.fetchall()]
     if not tids:
         return None
+    await reconcile_online_presence_from_db(tids)
     try:
         online = [t for t in tids if get_doctor_status(t) == "online"]
         if not online:
