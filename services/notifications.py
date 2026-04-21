@@ -39,14 +39,19 @@ async def notify_support_ticket_created(
     request_id: int,
 ) -> None:
     """
-    Уведомляет администраторов (с кнопками) и всех активных врачей (только текст).
-    Врач видит обращение, ответ через кнопки — у администратора.
+    Новое обращение: первая линия (SUPPORT_LINE_ADMIN_ID) с кнопками;
+    главный админ не получает уведомление до эскалации (1 ч).
+    Врачи — только текст.
     """
     from html import escape
 
+    import config as _cfg
     from config import ADMIN_IDS
+
+    support_line = int(getattr(_cfg, "SUPPORT_LINE_ADMIN_ID", 146617413) or 146617413)
     from database.doctors import DOCTOR_IDS
     from keyboards.admin import get_admin_support_keyboard
+    from services.support_escalation import schedule_support_escalation
 
     if telegram_username:
         who = f"@{escape(telegram_username)}"
@@ -69,8 +74,15 @@ async def notify_support_ticket_created(
             seen.add(uid)
             ordered.append(uid)
 
+    if support_line in ADMIN_IDS:
+        admin_with_keyboard = [support_line]
+    else:
+        admin_with_keyboard = list(ADMIN_IDS)
+
     for chat_id in ordered:
         if chat_id in ADMIN_IDS:
+            if chat_id not in admin_with_keyboard:
+                continue
             await safe_send_message(
                 chat_id,
                 body,
@@ -84,6 +96,14 @@ async def notify_support_ticket_created(
                 parse_mode="HTML",
             )
 
+    schedule_support_escalation(
+        request_id,
+        client_user_id,
+        telegram_username,
+        first_name,
+        text,
+    )
+
 
 async def notify_admins_client_support_reply(
     client_user_id: int,
@@ -92,10 +112,16 @@ async def notify_admins_client_support_reply(
     request_id: int,
     text: str,
 ) -> None:
-    """Ответ клиента в открытом обращении — только администраторам, с кнопками."""
+    """Ответ клиента: первая линия; после эскалации — ещё и главный админ."""
     from html import escape
 
+    import config as _cfg
+    from config import ADMIN_IDS
+
+    support_line = int(getattr(_cfg, "SUPPORT_LINE_ADMIN_ID", 146617413) or 146617413)
+    primary = int(getattr(_cfg, "PRIMARY_ADMIN_ID", 1092230808) or 1092230808)
     from keyboards.admin import get_admin_support_keyboard
+    from services.support_escalation import is_ticket_escalated
 
     if telegram_username:
         who = f"@{escape(telegram_username)}"
@@ -107,7 +133,16 @@ async def notify_admins_client_support_reply(
         f"📝 Текст:\n<pre>{escape(text)}</pre>"
         f"\n\n🔔 <i>Новое сообщение в обращении</i>"
     )
-    for admin_id in ADMIN_IDS:
+    recipients: list[int] = []
+    if support_line in ADMIN_IDS:
+        recipients.append(support_line)
+    if is_ticket_escalated(request_id) and primary in ADMIN_IDS:
+        if primary not in recipients:
+            recipients.append(primary)
+    if not recipients:
+        recipients = list(ADMIN_IDS)
+
+    for admin_id in recipients:
         await safe_send_message(
             admin_id,
             body,
