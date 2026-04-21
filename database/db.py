@@ -330,6 +330,10 @@ async def _run_ddl(db: _PgConnectionFacade) -> None:
         "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS doctor_name TEXT",
         "ALTER TABLE payments ADD COLUMN IF NOT EXISTS tbank_order_id TEXT",
         "ALTER TABLE payments ADD COLUMN IF NOT EXISTS tbank_payment_id TEXT",
+        """
+        ALTER TABLE doctors ADD COLUMN IF NOT EXISTS presence_status TEXT
+        NOT NULL DEFAULT 'offline'
+        """,
     ]
     for s in alters:
         try:

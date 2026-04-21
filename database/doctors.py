@@ -122,21 +122,37 @@ async def _fetch_spec_keys_raw(telegram_id: int) -> list[str]:
     return ordered_spec_keys(rows)
 
 
+async def persist_all_doctors_offline_in_db() -> None:
+    """Все врачи в БД — offline (админский сброс)."""
+    db = await get_db()
+    await db.execute("UPDATE doctors SET presence_status = 'offline'")
+    await db.commit()
+
+
 async def load_doctors_from_db():
-    """Загружает врачей из БД в память и Redis"""
+    """Загружает врачей из БД в память и Redis (тема + статус присутствия из БД)."""
     global DOCTOR_IDS
     db = await get_db()
     cursor = await db.execute(
-        "SELECT telegram_id, specialization FROM doctors WHERE is_active IS TRUE"
+        """
+        SELECT telegram_id, specialization,
+               COALESCE(presence_status, 'offline') AS presence_status
+        FROM doctors WHERE is_active IS TRUE
+        """
     )
     rows = await cursor.fetchall()
 
     DOCTOR_IDS = []
     for row in rows:
-        doctor_id, specialization = row
-        DOCTOR_IDS.append(doctor_id)
-        if not r.get(f"doctor:{doctor_id}:topic"):
-            r.set(f"doctor:{doctor_id}:topic", specialization)
+        doctor_id, specialization, presence_raw = row[0], row[1], row[2]
+        tid = int(doctor_id)
+        DOCTOR_IDS.append(tid)
+        if not r.get(f"doctor:{tid}:topic"):
+            r.set(f"doctor:{tid}:topic", specialization)
+        pr = str(presence_raw or "offline").strip().lower()
+        if pr != "online":
+            pr = "offline"
+        r.set(f"doctor:{tid}:status", pr)
 
     print(f"📋 Всего врачей в системе: {len(DOCTOR_IDS)}")
     return DOCTOR_IDS
