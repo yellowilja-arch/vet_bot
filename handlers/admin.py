@@ -4,13 +4,26 @@ from aiogram.filters import Command, StateFilter
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from html import escape
-from config import (
-    ADMIN_IDS,
-    ADMIN_BULK_ACCESS_DENIED,
-    REDIS_URL,
-    SUPPORT_TEMPLATE_TEXT,
-    can_admin_bulk_operations,
+import config as _cfg
+from config import ADMIN_IDS, REDIS_URL, SUPPORT_TEMPLATE_TEXT
+
+# Совместимость со старым config.py на сервере (частичный деплой без новых имён)
+ADMIN_BULK_ACCESS_DENIED = getattr(
+    _cfg,
+    "ADMIN_BULK_ACCESS_DENIED",
+    "⛔ У вас нет доступа к этой команде. Обратитесь к главному администратору.",
 )
+
+
+def _can_admin_bulk_operations(user_id: int) -> bool:
+    fn = getattr(_cfg, "can_admin_bulk_operations", None)
+    if callable(fn):
+        return fn(user_id)
+    forbidden = getattr(_cfg, "ADMIN_BULK_OPS_FORBIDDEN_IDS", None)
+    if forbidden is not None:
+        return user_id not in forbidden
+    line = int(getattr(_cfg, "SUPPORT_LINE_ADMIN_ID", 146617413) or 146617413)
+    return user_id != line
 from services.validators import (
     get_doctor_status,
     is_admin,
@@ -256,7 +269,7 @@ async def admin_clear_queue(message: Message):
     user_id = message.from_user.id
     if not await user_in_admin_context(user_id):
         return
-    if not can_admin_bulk_operations(user_id):
+    if not _can_admin_bulk_operations(user_id):
         await safe_send_message(user_id, ADMIN_BULK_ACCESS_DENIED)
         return
     affected, notify_ids, n_active_closed = await clear_queue("all")
@@ -546,7 +559,7 @@ async def reset_all(message: Message):
     user_id = message.from_user.id
     if not await user_in_admin_context(user_id):
         return
-    if not can_admin_bulk_operations(user_id):
+    if not _can_admin_bulk_operations(user_id):
         await safe_send_message(user_id, ADMIN_BULK_ACCESS_DENIED)
         return
 
@@ -559,7 +572,7 @@ async def reset_all_button(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if not await user_in_admin_context(user_id):
         return
-    if not can_admin_bulk_operations(user_id):
+    if not _can_admin_bulk_operations(user_id):
         await safe_send_message(user_id, ADMIN_BULK_ACCESS_DENIED)
         return
     await state.set_state(AdminState.waiting_resetall_confirm)
@@ -577,7 +590,7 @@ async def reset_all_confirm(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if not await user_in_admin_context(user_id):
         return
-    if not can_admin_bulk_operations(user_id):
+    if not _can_admin_bulk_operations(user_id):
         await state.clear()
         await safe_send_message(user_id, ADMIN_BULK_ACCESS_DENIED)
         return
