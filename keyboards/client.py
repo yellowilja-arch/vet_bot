@@ -232,22 +232,9 @@ def get_vaccination_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Да, проведена", callback_data="vac:yes"),
-                InlineKeyboardButton(text="❌ Нет, не проведена", callback_data="vac:no"),
-                InlineKeyboardButton(text="❓ Не знаю", callback_data="vac:unk"),
-            ],
-        ]
-    )
-
-
-def get_sterilization_keyboard() -> InlineKeyboardMarkup:
-    """Кастрация / стерилизация — Да / Нет / Не знаю."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Да, проведена", callback_data="ster:yes"),
-                InlineKeyboardButton(text="❌ Нет, не проведена", callback_data="ster:no"),
-                InlineKeyboardButton(text="❓ Не знаю", callback_data="ster:unk"),
+                InlineKeyboardButton(text="✅ Да", callback_data="vac_yes"),
+                InlineKeyboardButton(text="❌ Нет", callback_data="vac_no"),
+                InlineKeyboardButton(text="❓ Не знаю", callback_data="vac_unknown"),
             ],
         ]
     )
