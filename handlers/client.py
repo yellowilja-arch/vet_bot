@@ -68,6 +68,8 @@ from services.dialog_session import record_client_message
 from utils.helpers import safe_send_message, safe_send_photo, get_anonymous_id, split_text_chunks
 from keyboards.client import (
     TEXT_BTN_OUR_DOCTORS,
+    TEXT_BTN_CLIENT_INFO,
+    CLIENT_INSTRUCTION_TEXT,
     get_main_keyboard,
     get_topic_pay_keyboard,
     get_species_keyboard,
@@ -223,6 +225,7 @@ def _support_flow_exclude_texts() -> frozenset[str]:
     """Тексты кнопок меню и анкеты — не считать ответом в поддержку."""
     s = {
         "🆘 Помощь",
+        TEXT_BTN_CLIENT_INFO,
         TEXT_BTN_OUR_DOCTORS,
         "📋 Мои консультации",
         "🔙 Назад",
@@ -482,6 +485,19 @@ async def our_doctors_open(message: Message, state: FSMContext):
         await safe_send_message(user_id, "📭 Список врачей пока пуст. Обратитесь к администратору.")
         return
     await safe_send_message(user_id, text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.message(F.text == TEXT_BTN_CLIENT_INFO)
+async def client_information(message: Message):
+    """Инструкция по боту — регистрируем до анкеты/прочих FSM, чтобы текст кнопки не уходил в шаги опроса."""
+    user_id = message.from_user.id
+    if not await user_in_client_context(user_id):
+        await safe_send_message(
+            user_id,
+            "⛔ Эта кнопка доступна в клиентском меню. Откройте /start или переключитесь в режим клиента.",
+        )
+        return
+    await safe_send_message(user_id, CLIENT_INSTRUCTION_TEXT)
 
 
 @router.callback_query(F.data.startswith("docsel:"))
