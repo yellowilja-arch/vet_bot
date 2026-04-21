@@ -1,41 +1,41 @@
 # data/problems.py
 
-# Универсальная тема (не в SPECIALIZATION_KEYS — нельзя выбрать как специализацию врача в админке)
+# Универсальная тема (нет в SPECIALIZATION_KEYS — в админке задаются только клинические роли)
 UNIVERSAL_TOPIC_KEY = "universal_triage"
 
-# Специализации: id → отображаемое название (эмодзи + роль)
+# Специализации: id → отображаемое название (эмодзи + роль). Без «ВОП» — только терапевт и узкие специалисты.
 SPECIALISTS = {
-    "gp": "🩺 Врач общей практики",
     "therapist": "👨‍⚕️ Терапевт",
-    "oncologist": "🎗️ Онколог",
-    "cardiologist": "❤️ Кардиолог",
-    "gastroenterologist": "🩺 Гастроэнтеролог",
-    "orthopedist": "🦴 Ортопед",
     "surgeon": "🔪 Хирург",
-    "nephrologist": "🩸 Нефролог",
+    "orthopedist": "🦴 Ортопед",
     "neurologist": "🧠 Невролог",
+    "cardiologist": "❤️ Кардиолог",
+    "oncologist": "🎗️ Онколог",
+    "gastroenterologist": "🥣 Гастроэнтеролог",
+    "nephrologist": "🩸 Нефролог",
     "dermatologist": "🐾 Дерматолог",
     "reproductologist": "🤰 Репродуктолог",
     "virologist": "🦠 Вирусолог",
     "radiologist": "📷 Врач визуальной диагностики",
-    UNIVERSAL_TOPIC_KEY: "❓ Не знаю, куда/к кому обратиться",
+    "ophthalmologist": "👁️ Офтальмолог",
+    UNIVERSAL_TOPIC_KEY: "❓ Не знаю, куда обратиться",
 }
 
-# Порядок кнопок выбора специализации (админ / отображение списков)
+# Порядок кнопок выбора специализации (админ / отображение списков) — 13 клинических ролей
 SPECIALIZATION_KEYS = [
-    "gp",
     "therapist",
-    "oncologist",
-    "cardiologist",
-    "gastroenterologist",
-    "orthopedist",
     "surgeon",
-    "nephrologist",
+    "orthopedist",
     "neurologist",
+    "cardiologist",
+    "oncologist",
+    "gastroenterologist",
+    "nephrologist",
     "dermatologist",
     "reproductologist",
     "virologist",
     "radiologist",
+    "ophthalmologist",
 ]
 
 # Категории
@@ -49,6 +49,18 @@ CATEGORIES = {
     "emergency": {"name": "🆘 Экстренная помощь", "emoji": "🆘"},
     "specialist": {"name": "🎯 Консультация специалиста", "emoji": "🎯"},
 }
+
+# Порядок категорий в главном меню клиента
+CATEGORY_MENU_ORDER = [
+    "common_symptoms",
+    "trauma",
+    "internal",
+    "dentistry",
+    "infectious",
+    "reproduction",
+    "emergency",
+    "specialist",
+]
 
 # Все проблемы (65 штук)
 PROBLEMS = {
@@ -281,7 +293,19 @@ PROBLEMS = {
         "category": "specialist",
         "description": "Консультация узкого специалиста",
         "price": 500,
-        "specialists": ["surgeon", "orthopedist", "gastroenterologist", "therapist", "cardiologist", "radiologist", "neurologist", "nephrologist", "oncologist", "virologist", "dermatologist"],
+        "specialists": [
+            "surgeon",
+            "orthopedist",
+            "gastroenterologist",
+            "therapist",
+            "cardiologist",
+            "radiologist",
+            "ophthalmologist",
+            "nephrologist",
+            "oncologist",
+            "virologist",
+            "dermatologist",
+        ],
         "urgent": False
     },
     "what_analyses": {
@@ -293,7 +317,7 @@ PROBLEMS = {
         "urgent": False
     },
     "leukemia": {
-        "name": "🦠 Лейкоз (вирусная лейкемия кошек)",
+        "name": "🦠 Лейкоз (FeLV)",
         "category": "infectious",
         "description": "Вирусная лейкемия кошек (FeLV)",
         "price": 500,
@@ -301,7 +325,7 @@ PROBLEMS = {
         "urgent": False
     },
     "immunodeficiency": {
-        "name": "🦠 Иммунодефицит",
+        "name": "🦠 Иммунодефицит (FIV)",
         "category": "infectious",
         "description": "Вирусный иммунодефицит кошек (FIV)",
         "price": 500,
@@ -309,7 +333,7 @@ PROBLEMS = {
         "urgent": False
     },
     "fip": {
-        "name": "🦠 ФИП (вирусный перитонит кошек)",
+        "name": "🦠 ФИП (перитонит кошек)",
         "category": "infectious",
         "description": "Коронавирусный перитонит кошек",
         "price": 500,
@@ -317,15 +341,15 @@ PROBLEMS = {
         "urgent": False
     },
     "panleukopenia": {
-        "name": "🦠 Панлекопения (парвовирусная инфекция кошек)",
+        "name": "🦠 Панлейкопения",
         "category": "infectious",
-        "description": "Парвовирусная инфекция кошек",
+        "description": "Парвовирусная инфекция кошек (панлейкопения)",
         "price": 500,
         "specialists": ["therapist", "virologist"],
         "urgent": True
     },
     "respiratory_viral": {
-        "name": "🦠 Респираторные вирусные болезни",
+        "name": "🦠 Респираторные вирусные",
         "category": "infectious",
         "description": "Ринотрахеит, калицивироз",
         "price": 500,
@@ -333,7 +357,7 @@ PROBLEMS = {
         "urgent": False
     },
     "respiratory_bacterial": {
-        "name": "🦠 Бактериальные респираторные болезни",
+        "name": "🦠 Бактериальные респираторные",
         "category": "infectious",
         "description": "Хламидиоз, токсоплазмоз, микоплазмоз",
         "price": 500,
@@ -351,9 +375,9 @@ PROBLEMS = {
     "specialist_consult": {
         "name": "🎯 Консультация у специалиста",
         "category": "specialist",
-        "description": "Приём узкого специалиста",
+        "description": "Приём узкого специалиста — маршрут по всем направлениям клиники",
         "price": 500,
-        "specialists": ["therapist"],
+        "specialists": list(SPECIALIZATION_KEYS),
         "urgent": False
     },
     "proper_nutrition": {
@@ -373,8 +397,8 @@ PROBLEMS = {
         "urgent": False
     },
     "pre_surgery": {
-        "name": "🔪 Подготовка перед хирургическим вмешательством",
-        "category": "trauma",
+        "name": "🔪 Подготовка к операции",
+        "category": "internal",
         "description": "Рекомендации перед операцией",
         "price": 500,
         "specialists": ["therapist", "surgeon"],
@@ -382,15 +406,15 @@ PROBLEMS = {
     },
     "eye_trauma": {
         "name": "👁️ Травмы глаз",
-        "category": "trauma",
+        "category": "internal",
         "description": "Выпадение третьего века, покраснение, помутнение роговицы",
         "price": 500,
         "specialists": ["therapist"],
         "urgent": True
     },
     "seizures": {
-        "name": "⚡ Судороги / эпилептические припадки",
-        "category": "emergency",
+        "name": "⚡ Судороги / эпилепсия",
+        "category": "internal",
         "description": "Эпилептические припадки, судороги",
         "price": 500,
         "specialists": ["neurologist"],
@@ -398,7 +422,7 @@ PROBLEMS = {
     },
     "poisoning": {
         "name": "☠️ Отравление",
-        "category": "emergency",
+        "category": "internal",
         "description": "Отравление ядами, лекарствами, растениями",
         "price": 500,
         "specialists": ["therapist"],
@@ -413,16 +437,16 @@ PROBLEMS = {
         "urgent": True
     },
     "foreign_body": {
-        "name": "🦴 Инородное тело в ЖКТ или дыхательных путях",
+        "name": "🦴 Инородное тело",
         "category": "emergency",
-        "description": "Подозрение на заглатывание инородного предмета",
+        "description": "Подозрение на инородное тело в ЖКТ или дыхательных путях",
         "price": 500,
         "specialists": ["surgeon"],
         "urgent": True
     },
     "dyspnea": {
         "name": "🌬️ Одышка / затруднённое дыхание",
-        "category": "emergency",
+        "category": "internal",
         "description": "Затруднённое дыхание без кашля и чихания",
         "price": 500,
         "specialists": ["therapist", "cardiologist"],
@@ -454,7 +478,7 @@ PROBLEMS = {
     },
     "bites": {
         "name": "🐕 Укусы",
-        "category": "emergency",
+        "category": "trauma",
         "description": "Укусы других животных, насекомых, змей",
         "price": 500,
         "specialists": ["therapist", "surgeon"],
@@ -462,7 +486,7 @@ PROBLEMS = {
     },
     "burns": {
         "name": "🔥 Ожоги",
-        "category": "emergency",
+        "category": "trauma",
         "description": "Термические, химические, солнечные ожоги",
         "price": 500,
         "specialists": ["therapist", "surgeon"],
@@ -470,7 +494,7 @@ PROBLEMS = {
     },
     "collapse": {
         "name": "😵 Обморок / коллапс",
-        "category": "emergency",
+        "category": "internal",
         "description": "Внезапная слабость, падение",
         "price": 500,
         "specialists": ["therapist"],
@@ -486,14 +510,14 @@ PROBLEMS = {
     },
     "mastitis": {
         "name": "🤱 Мастит",
-        "category": "reproduction",
+        "category": "internal",
         "description": "Воспаление молочных желёз",
         "price": 500,
         "specialists": ["therapist"],
         "urgent": False
     },
     "difficult_birth": {
-        "name": "🤰 Затруднённые роды / патология беременности",
+        "name": "🤰 Затруднённые роды",
         "category": "reproduction",
         "description": "Осложнения беременности и родов",
         "price": 500,
@@ -509,7 +533,7 @@ PROBLEMS = {
         "urgent": True
     },
     "chipping": {
-        "name": "🔖 Чипирование / регистрация микрочипа",
+        "name": "🔖 Чипирование",
         "category": "dentistry",
         "description": "Установка микрочипа, регистрация",
         "price": 500,
@@ -517,9 +541,9 @@ PROBLEMS = {
         "urgent": False
     },
     "nail_clipping": {
-        "name": "✂️ Стрижка когтей и чистка анальных желёз",
+        "name": "✂️ Стрижка когтей и чистка желёз",
         "category": "dentistry",
-        "description": "Гигиенические процедуры",
+        "description": "Гигиенические процедуры, чистка анальных желёз",
         "price": 500,
         "specialists": ["therapist"],
         "urgent": False
@@ -527,7 +551,7 @@ PROBLEMS = {
     "emergency_help": {
         "name": "🚨 Экстренная помощь",
         "category": "emergency",
-        "description": "Шок, кровотечение, остановка дыхания",
+        "description": "Срочная ситуация: после оплаты вы получите гайд первой помощи и адрес ближайшей клиники. При угрозе жизни звоните в клинику или везите питомца сразу.",
         "price": 500,
         "specialists": [],
         "urgent": True
@@ -551,7 +575,7 @@ PROBLEMS = {
     "dentistry_surgery": {
         "name": "🦷 Стоматология",
         "category": "dentistry",
-        "description": "Профессиональная чистка зубов под седацией, удаление, шлифовка",
+        "description": "Профессиональная чистка под седацией, удаление, шлифовка",
         "price": 500,
         "specialists": ["surgeon"],
         "urgent": False
@@ -581,7 +605,7 @@ PROBLEMS = {
         "urgent": False,
     },
     UNIVERSAL_TOPIC_KEY: {
-        "name": "❓ Не знаю, куда/к кому обратиться",
+        "name": "❓ Не знаю, куда обратиться",
         "category": "specialist",
         "description": "Общая консультация, подбор направления",
         "price": 500,
