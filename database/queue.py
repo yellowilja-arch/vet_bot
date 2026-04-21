@@ -261,7 +261,9 @@ async def clear_queue(topic: str) -> tuple[list[int], list[int], int]:
             await db.execute(
                 f"""
                 UPDATE consultations
-                SET doctor_id = NULL, doctor_name = NULL, doctor_specialization = NULL
+                SET doctor_id = NULL,
+                    doctor_name = NULL,
+                    doctor_specialization = COALESCE(problem_key, '—')
                 WHERE doctor_id IS NOT NULL
                   AND status IN ('paid', 'waiting_payment', 'waiting_doctor_offline')
                   AND client_id IN ({ph})
