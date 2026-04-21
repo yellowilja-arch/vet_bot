@@ -1,20 +1,46 @@
+import config as _cfg
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 from data.problems import SPECIALISTS, SPECIALIZATION_KEYS
 
 
-def get_admin_main_keyboard():
-    """Главная панель администратора"""
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📬 Обращения"), KeyboardButton(text="📊 Статистика")],
-            [KeyboardButton(text="🩺 Здоровье"), KeyboardButton(text="🚫 Заблокировать")],
-            [KeyboardButton(text="✅ Разблокировать"), KeyboardButton(text="➕ Добавить врача")],
-            [KeyboardButton(text="✏️ Изменить врача"), KeyboardButton(text="➖ Удалить врача")],
-            [KeyboardButton(text="🔄 Сброс состояний")],
-            [KeyboardButton(text="💾 Бэкап")],
-        ],
-        resize_keyboard=True
+def _can_admin_bulk_operations(user_id: int) -> bool:
+    """Работает и со старым config.py без can_admin_bulk_operations."""
+    fn = getattr(_cfg, "can_admin_bulk_operations", None)
+    if callable(fn):
+        return fn(user_id)
+    forbidden = getattr(_cfg, "ADMIN_BULK_OPS_FORBIDDEN_IDS", None)
+    if forbidden is not None:
+        return user_id not in forbidden
+    line = int(getattr(_cfg, "SUPPORT_LINE_ADMIN_ID", 146617413) or 146617413)
+    return user_id != line
+
+
+def get_admin_main_keyboard(user_id: int | None = None):
+    """Главная панель администратора. У ограниченного админа нет массового сброса."""
+    rows: list[list[KeyboardButton]] = [
+        [KeyboardButton(text="📬 Обращения"), KeyboardButton(text="📊 Статистика")],
+        [KeyboardButton(text="🩺 Здоровье"), KeyboardButton(text="🚫 Заблокировать")],
+        [KeyboardButton(text="✅ Разблокировать"), KeyboardButton(text="➕ Добавить врача")],
+        [KeyboardButton(text="✏️ Изменить врача"), KeyboardButton(text="➖ Удалить врача")],
+    ]
+    if user_id is None or _can_admin_bulk_operations(user_id):
+        rows.append([KeyboardButton(text="🔄 Сброс состояний")])
+    rows.append([KeyboardButton(text="💾 Бэкап")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def get_escalation_reply_keyboard(user_id: int, request_id: int) -> InlineKeyboardMarkup:
+    """Только «Ответить» — уведомление об эскалации главному админу."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📝 Ответить",
+                    callback_data=f"support_reply:{user_id}:{request_id}",
+                )
+            ],
+        ]
     )
 
 
