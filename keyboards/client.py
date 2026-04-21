@@ -5,9 +5,35 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 # Подпись кнопки главного меню — импортируется в handlers для сравнения текста
 
 TEXT_BTN_OUR_DOCTORS = "📋 Наши врачи"
+TEXT_BTN_CLIENT_INFO = "📚 Информация"
 
+CLIENT_INSTRUCTION_TEXT = """✨ ПРИВЕТ! РАССКАЖУ, КАК ВСЁ РАБОТАЕТ.
 
+👇 ВСЕГО 4 ШАГА:
 
+1️⃣ ВЫБЕРИТЕ
+   • Нужную тему из списка
+   • Или конкретного врача (раздел «Наши врачи»)
+
+2️⃣ ОПЛАТИТЕ
+   • Произведите оплату
+
+3️⃣ РАССКАЖИТЕ О ПИТОМЦЕ
+   • Имя, вид, возраст, вес, порода
+   • Хронические болезни, вакцинация
+
+4️⃣ ОБЩАЙТЕСЬ
+   • Врач ответит в этом чате
+   • Можно отправлять фото и видео
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+📌 НА ЗАМЕТКУ
+
+• Время консультации не должно превышать 45 минут
+• Если врача нет онлайн — ответим в течение 24 часов
+• Всю историю можно посмотреть в «Мои консультации»
+• При возникновении технических вопросов/сложностей нажмите «🆘 Помощь» — администратор ответит"""
 
 
 def get_main_keyboard(category_labels: list[str], universal_label: str) -> ReplyKeyboardMarkup:
@@ -20,7 +46,12 @@ def get_main_keyboard(category_labels: list[str], universal_label: str) -> Reply
             KeyboardButton(text="📋 Мои консультации"),
         ]
     )
-    buttons.append([KeyboardButton(text="🆘 Помощь")])
+    buttons.append(
+        [
+            KeyboardButton(text=TEXT_BTN_CLIENT_INFO),
+            KeyboardButton(text="🆘 Помощь"),
+        ]
+    )
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
