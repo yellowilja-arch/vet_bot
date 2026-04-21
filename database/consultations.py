@@ -2,21 +2,80 @@ from database.db import get_db, _db_lock
 from services.validators import has_active_consultation
 from database.doctors import get_doctor_name, get_doctor_specialization
 
+# Совпадает с частичным UNIQUE idx_open_client_consultation в db.py
+_OPEN_CONSULTATION_STATUSES = (
+    "waiting_payment",
+    "paid",
+    "active",
+    "waiting_doctor_offline",
+)
+
 
 async def save_consultation_start(client_id: int, anonymous_id: str, doctor_id: int, problem_key: str):
     """Сохраняет начало консультации, возвращает consultation_id"""
     if await has_active_consultation(client_id):
         return None
-    
+
     doctor_name = await get_doctor_name(doctor_id) if doctor_id else None
-    
+    doctor_spec = (
+        await get_doctor_specialization(doctor_id) if doctor_id else None
+    )
+    # Колонка в БД NOT NULL; без назначенного врача кладём тему (как раньше по смыслу).
+    spec_for_db = doctor_spec if doctor_spec is not None else (problem_key or "")
+
     db = await get_db()
     async with _db_lock:
-        cursor = await db.execute('''
-            INSERT INTO consultations 
+        ph = ",".join("?" * len(_OPEN_CONSULTATION_STATUSES))
+        cur = await db.execute(
+            f"""
+            SELECT id, status FROM consultations
+            WHERE client_id = ? AND status IN ({ph})
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (client_id, *_OPEN_CONSULTATION_STATUSES),
+        )
+        row = await cur.fetchone()
+        if row:
+            cid, st = int(row[0]), row[1]
+            if st == "waiting_payment":
+                await db.execute(
+                    """
+                    UPDATE consultations SET
+                        client_anonymous_id = ?,
+                        doctor_id = ?,
+                        doctor_name = ?,
+                        doctor_specialization = ?,
+                        problem_key = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        anonymous_id,
+                        doctor_id,
+                        doctor_name,
+                        spec_for_db,
+                        problem_key,
+                        cid,
+                    ),
+                )
+            await db.commit()
+            return cid
+
+        cursor = await db.execute(
+            """
+            INSERT INTO consultations
             (client_id, client_anonymous_id, doctor_id, doctor_name, doctor_specialization, status, problem_key)
             VALUES (?, ?, ?, ?, ?, 'waiting_payment', ?)
-        ''', (client_id, anonymous_id, doctor_id, doctor_name, problem_key, problem_key))
+            """,
+            (
+                client_id,
+                anonymous_id,
+                doctor_id,
+                doctor_name,
+                spec_for_db,
+                problem_key,
+            ),
+        )
         await db.commit()
         return cursor.lastrowid
 
