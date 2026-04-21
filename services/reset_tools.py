@@ -1,8 +1,8 @@
 import redis
 from config import REDIS_URL
-from database.doctors import DOCTOR_IDS
+from database.doctors import DOCTOR_IDS, persist_all_doctors_offline_in_db
 from database.db import get_db
-from services.validators import set_doctor_status
+from services.validators import set_doctor_status, persist_doctor_presence_to_db
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -51,6 +51,7 @@ async def reset_all_states():
     # Сбрасываем статусы врачей
     for doctor_id in DOCTOR_IDS:
         set_doctor_status(doctor_id, "offline")
+    await persist_all_doctors_offline_in_db()
 
 async def close_stuck_requests():
     """Закрывает зависшие запросы (старше 24 часов)"""
@@ -66,3 +67,4 @@ async def unlock_all_doctors():
     for doctor_id in DOCTOR_IDS:
         r.delete(f"doctor:{doctor_id}:current_client")
         set_doctor_status(doctor_id, "offline")
+    await persist_all_doctors_offline_in_db()
