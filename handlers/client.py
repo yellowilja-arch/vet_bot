@@ -1483,7 +1483,13 @@ async def my_consultations(message: Message):
     text = "📋 <b>Ваши консультации</b>\n\n"
     for cons in consultations:
         status_emoji = "✅" if cons[3] == "ended" else "⚠️" if cons[3] == "auto_ended" else "⏳"
-        date = cons[4][:10] if cons[4] else "дата неизвестна"
+        created = cons[4]
+        if created is None:
+            date = "дата неизвестна"
+        elif hasattr(created, "strftime"):
+            date = created.strftime("%Y-%m-%d")
+        else:
+            date = str(created)[:10]
         text += f"{status_emoji} #{cons[0]} — {cons[1] or 'Врач не назначен'} от {date}\n"
     
     await safe_send_message(user_id, text, parse_mode="HTML")
