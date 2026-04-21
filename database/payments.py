@@ -7,7 +7,7 @@ async def save_payment(client_id: int, consultation_id: int, receipt_file_id: st
     async with _db_lock:
         await db.execute('''
             INSERT INTO payments (client_id, consultation_id, amount, status, receipt_file_id)
-            VALUES (?, ?, 500, "pending", ?)
+            VALUES (?, ?, 500, 'pending', ?)
         ''', (client_id, consultation_id, receipt_file_id))
         await db.commit()
 
@@ -99,7 +99,7 @@ async def confirm_payment(client_id: int, consultation_id: int):
         if consultation_id:
             await db.execute(
                 """
-                UPDATE consultations SET status = 'paid', payment_confirmed = 1
+                UPDATE consultations SET status = 'paid', payment_confirmed = TRUE
                 WHERE id = ? AND client_id = ?
                 """,
                 (consultation_id, client_id),
@@ -114,8 +114,8 @@ async def reject_payment(client_id: int):
     db = await get_db()
     async with _db_lock:
         await db.execute('''
-            UPDATE payments SET status = "rejected"
-            WHERE client_id = ? AND status = "pending"
+            UPDATE payments SET status = 'rejected'
+            WHERE client_id = ? AND status = 'pending'
         ''', (client_id,))
         await db.commit()
 
@@ -125,7 +125,7 @@ async def get_pending_payment(client_id: int):
     db = await get_db()
     cursor = await db.execute('''
         SELECT id, consultation_id FROM payments
-        WHERE client_id = ? AND status = "pending"
+        WHERE client_id = ? AND status = 'pending'
         ORDER BY id DESC LIMIT 1
     ''', (client_id,))
     return await cursor.fetchone()

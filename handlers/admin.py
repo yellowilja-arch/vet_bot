@@ -1,10 +1,10 @@
 from aiogram import Router, F
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command, StateFilter
-from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from html import escape
-from config import ADMIN_IDS, DB_PATH, REDIS_URL, SUPPORT_TEMPLATE_TEXT
+from config import ADMIN_IDS, REDIS_URL, SUPPORT_TEMPLATE_TEXT
 from services.validators import (
     get_doctor_status,
     is_admin,
@@ -24,7 +24,7 @@ from database.doctors import (
     specializations_slash_plain,
 )
 from database.queue import get_queue_length, clear_queue
-from database.db import get_db, checkpoint_wal_for_backup
+from database.db import get_db
 from utils.helpers import safe_send_message, split_text_chunks
 from keyboards.admin import (
     get_support_queue_keyboard,
@@ -41,10 +41,7 @@ from database.support import (
 from states.forms import WaitingState, AdminState
 import logging
 import os
-import shutil
-import tempfile
 import redis
-from datetime import datetime
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -115,13 +112,13 @@ async def _reply_admin_stats(user_id: int) -> None:
     users_total = (await cursor.fetchone())[0]
     cursor = await db.execute("SELECT COUNT(*) FROM consultations")
     cons_total = (await cursor.fetchone())[0]
-    cursor = await db.execute('SELECT COUNT(*) FROM consultations WHERE status = "active"')
+    cursor = await db.execute("SELECT COUNT(*) FROM consultations WHERE status = 'active'")
     active = (await cursor.fetchone())[0]
     cursor = await db.execute("SELECT COUNT(*) FROM consultations WHERE ended_at IS NOT NULL")
     completed = (await cursor.fetchone())[0]
 
     cursor = await db.execute(
-        "SELECT telegram_id FROM doctors WHERE is_active = 1"
+        "SELECT telegram_id FROM doctors WHERE is_active IS TRUE"
     )
     doctor_rows = await cursor.fetchall()
     doctor_ids = {int(r[0]) for r in doctor_rows}
@@ -176,11 +173,12 @@ async def _reply_admin_stats(user_id: int) -> None:
 
     cursor = await db.execute(
         """
-        SELECT d.name, d.specialization, GROUP_CONCAT(ds.specialization, ',') AS spec_csv
+        SELECT d.name, d.specialization,
+               string_agg(ds.specialization, ',' ORDER BY ds.specialization) AS spec_csv
         FROM doctors d
         LEFT JOIN doctor_specializations ds ON ds.telegram_id = d.telegram_id
         GROUP BY d.id, d.name, d.specialization
-        ORDER BY d.name COLLATE NOCASE ASC
+        ORDER BY LOWER(d.name) ASC
         """
     )
     all_doctor_rows = await cursor.fetchall()
@@ -211,12 +209,12 @@ async def _reply_admin_health(user_id: int) -> None:
     try:
         db = await get_db()
         await db.execute("SELECT 1")
-        sqlite_status = "✅"
+        db_status = "✅"
     except Exception as e:
-        sqlite_status = f"❌ {e}"
+        db_status = f"❌ {e}"
 
     try:
-        cursor = await db.execute('SELECT COUNT(*) FROM consultations WHERE status = "active"')
+        cursor = await db.execute("SELECT COUNT(*) FROM consultations WHERE status = 'active'")
         active_cons = (await cursor.fetchone())[0]
     except Exception:
         active_cons = "ошибка"
@@ -226,7 +224,7 @@ async def _reply_admin_health(user_id: int) -> None:
 
     text = f"🩺 <b>Здоровье бота</b>\n\n"
     text += f"Redis: {redis_status}\n"
-    text += f"SQLite: {sqlite_status}\n"
+    text += f"PostgreSQL: {db_status}\n"
     text += f"Активных консультаций: {active_cons}\n"
     text += f"Врачей онлайн: {online_doctors}\n"
     text += f"Очередь: {queue_lengths}\n"
@@ -276,46 +274,17 @@ async def _admin_send_sqlite_backup(
     *,
     announce_progress: bool = True,
 ) -> None:
-    """Копирует SQLite БД и отправляет .db файл администратору."""
+    """Ранее: файл SQLite. Сейчас БД — PostgreSQL; используйте бэкап Railway / pg_dump."""
     if not await user_in_admin_context(admin_id):
         await safe_send_message(admin_id, "⛔ Только для администраторов")
         return
 
-    if announce_progress:
-        await safe_send_message(admin_id, "⏳ Создаю бэкап базы данных...")
-
-    temp_path: str | None = None
-    try:
-        db_file = os.path.abspath(DB_PATH)
-        if not os.path.isfile(db_file):
-            await safe_send_message(admin_id, "❌ Файл базы данных не найден!")
-            return
-
-        await checkpoint_wal_for_backup()
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_name = f"vet_bot_backup_{timestamp}.db"
-        temp_path = os.path.join(tempfile.gettempdir(), backup_name)
-        shutil.copy2(db_file, temp_path)
-        size_b = os.path.getsize(temp_path)
-        document = FSInputFile(temp_path, filename=backup_name)
-        caption = f"✅ Бэкап БД от {timestamp}\n📦 Размер: {size_b} байт"
-        if attach_to_message is not None:
-            await attach_to_message.answer_document(document=document, caption=caption)
-        else:
-            await bot.send_document(admin_id, document=document, caption=caption)
-    except Exception as e:
-        await safe_send_message(
-            admin_id,
-            f"❌ Ошибка создания бэкапа:\n<pre>{escape(str(e))}</pre>",
-            parse_mode="HTML",
-        )
-    finally:
-        if temp_path and os.path.isfile(temp_path):
-            try:
-                os.remove(temp_path)
-            except OSError:
-                pass
+    await safe_send_message(
+        admin_id,
+        "ℹ️ Бот использует <b>PostgreSQL</b>. Файлового .db больше нет.\n"
+        "Снимайте копии через панель Railway (PostgreSQL → Backups) или <code>pg_dump</code>.",
+        parse_mode="HTML",
+    )
 
 
 @router.message(F.text == "💾 Бэкап")
@@ -370,7 +339,16 @@ async def ban_user(message: Message):
     reason = " ".join(args[2:]) if len(args) > 2 else None
     
     db = await get_db()
-    await db.execute('INSERT OR REPLACE INTO blacklist (user_id, reason, blocked_by) VALUES (?, ?, ?)', (target_id, reason, user_id))
+    await db.execute(
+        """
+        INSERT INTO blacklist (user_id, reason, blocked_by)
+        VALUES (?, ?, ?)
+        ON CONFLICT (user_id) DO UPDATE SET
+            reason = EXCLUDED.reason,
+            blocked_by = EXCLUDED.blocked_by
+        """,
+        (target_id, reason, user_id),
+    )
     await db.commit()
     
     await safe_send_message(user_id, f"🚫 Пользователь {target_id} заблокирован")
@@ -599,7 +577,13 @@ async def ban_receive_reason(message: Message, state: FSMContext):
     reason = None if reason_raw == "-" else reason_raw
     db = await get_db()
     await db.execute(
-        "INSERT OR REPLACE INTO blacklist (user_id, reason, blocked_by) VALUES (?, ?, ?)",
+        """
+        INSERT INTO blacklist (user_id, reason, blocked_by)
+        VALUES (?, ?, ?)
+        ON CONFLICT (user_id) DO UPDATE SET
+            reason = EXCLUDED.reason,
+            blocked_by = EXCLUDED.blocked_by
+        """,
         (target_id, reason, admin_id),
     )
     await db.commit()

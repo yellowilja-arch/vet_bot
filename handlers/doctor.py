@@ -388,7 +388,7 @@ async def run_next_from_queue(doctor_id: int) -> None:
         cursor = await db.execute(
             """
             SELECT id, problem_key FROM consultations 
-            WHERE client_id = ? AND status = "paid"
+            WHERE client_id = ? AND status = 'paid'
             ORDER BY id DESC LIMIT 1
             """,
             (client_id,),

@@ -15,7 +15,7 @@ async def notify_admin_startup():
     from database.db import get_db
     from database.doctors import DOCTOR_IDS
     db = await get_db()
-    cursor = await db.execute('SELECT COUNT(*) FROM consultations WHERE status = "active"')
+    cursor = await db.execute("SELECT COUNT(*) FROM consultations WHERE status = 'active'")
     active_count = (await cursor.fetchone())[0]
     
     await notify_admin(

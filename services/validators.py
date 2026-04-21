@@ -27,7 +27,7 @@ async def is_blocked(user_id):
 async def has_active_consultation(client_id):
     """Проверяет, есть ли у клиента активная консультация"""
     db = await get_db()
-    cursor = await db.execute('SELECT id FROM consultations WHERE client_id = ? AND status = "active"', (client_id,))
+    cursor = await db.execute("SELECT id FROM consultations WHERE client_id = ? AND status = 'active'", (client_id,))
     return await cursor.fetchone() is not None
 
 
@@ -36,7 +36,7 @@ async def is_client_active(client_id):
     if r.get(f"user:{client_id}:active"):
         return True
     db = await get_db()
-    cursor = await db.execute('SELECT 1 FROM consultations WHERE client_id = ? AND status = "active"', (client_id,))
+    cursor = await db.execute("SELECT 1 FROM consultations WHERE client_id = ? AND status = 'active'", (client_id,))
     return await cursor.fetchone() is not None
 
 
@@ -192,4 +192,4 @@ async def is_payment_confirmed(consultation_id: int):
     db = await get_db()
     cursor = await db.execute('SELECT payment_confirmed FROM consultations WHERE id = ?', (consultation_id,))
     row = await cursor.fetchone()
-    return row and row[0] == 1
+    return bool(row and row[0])

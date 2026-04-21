@@ -29,7 +29,7 @@ async def save_consultation_end(consultation_id: int, status: str, client_msgs: 
             UPDATE consultations SET 
                 status = ?, 
                 ended_at = CURRENT_TIMESTAMP, 
-                duration_seconds = (strftime("%s", "now") - strftime("%s", created_at)),
+                duration_seconds = (EXTRACT(EPOCH FROM NOW())::bigint - EXTRACT(EPOCH FROM created_at)::bigint),
                 client_messages = ?,
                 doctor_messages = ?
             WHERE id = ?
@@ -99,7 +99,7 @@ async def get_active_consultations():
     """Возвращает все активные консультации"""
     db = await get_db()
     cursor = await db.execute('''
-        SELECT id, client_id, doctor_id FROM consultations WHERE status = "active"
+        SELECT id, client_id, doctor_id FROM consultations WHERE status = 'active'
     ''')
     return await cursor.fetchall()
 
@@ -305,7 +305,7 @@ async def list_unanswered_rows_for_doctor(doctor_telegram_id: int):
             c.recent_illness,
             c.problem_key,
             c.status,
-            (strftime('%s', 'now') - strftime('%s', c.waiting_reply_since)) / 3600.0
+            (EXTRACT(EPOCH FROM NOW()) - EXTRACT(EPOCH FROM c.waiting_reply_since)) / 3600.0
         FROM consultations c
         WHERE c.doctor_id = ?
           AND c.pet_name IS NOT NULL
@@ -336,7 +336,7 @@ async def list_unanswered_detailed_for_reminders():
             c.problem_key,
             c.status,
             c.doctor_name,
-            (strftime('%s', 'now') - strftime('%s', c.waiting_reply_since)) / 3600.0
+            (EXTRACT(EPOCH FROM NOW()) - EXTRACT(EPOCH FROM c.waiting_reply_since)) / 3600.0
         FROM consultations c
         WHERE c.doctor_id IS NOT NULL
           AND c.pet_name IS NOT NULL

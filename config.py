@@ -51,26 +51,11 @@ YC_ENDPOINT = "https://storage.yandexcloud.net"
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 # ============================================
-# SQLite
+# PostgreSQL
 # ============================================
-# На Railway файловая система контейнера эфемерна: без тома vet_bot.db в корне
-# проекта обнуляется при каждом редеплое (пропадают врачи и прочие данные).
-#
-# Рекомендация: в проекте Railway добавьте Volume, смонтируйте его в /data и
-# либо не задавайте DB_PATH (ниже сработает путь по умолчанию для Railway),
-# либо явно: DB_PATH=/data/vet_bot.db
-def _resolve_sqlite_path() -> str:
-    explicit = (os.getenv("DB_PATH") or "").strip()
-    if explicit:
-        return explicit
-    if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_NAME"):
-        if os.name == "nt":
-            return "vet_bot.db"
-        return "/data/vet_bot.db"
-    return "vet_bot.db"
-
-
-DB_PATH = _resolve_sqlite_path()
+# Строка подключения (обязательна). В Railway: сервис Postgres → DATABASE_URL;
+# при необходимости продублируйте то же значение в PGDATABASE_URL.
+DATABASE_URL = (os.getenv("DATABASE_URL") or os.getenv("PGDATABASE_URL") or "").strip()
 
 # ============================================
 # Врачи: синхронизация по HTTP (без Volume на PaaS)

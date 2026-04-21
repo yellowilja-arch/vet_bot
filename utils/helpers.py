@@ -17,12 +17,12 @@ async def safe_send_message(chat_id, text, retries=3, **kwargs):
         print(f"⚠️ Пользователь {chat_id} заблокировал бота")
         from database.db import get_db
         db = await get_db()
-        cursor = await db.execute('SELECT id FROM consultations WHERE client_id = ? AND status = "active"', (chat_id,))
+        cursor = await db.execute("SELECT id FROM consultations WHERE client_id = ? AND status = 'active'", (chat_id,))
         if await cursor.fetchone():
             doctor_id = r.get(f"client:{chat_id}:doctor")
             if doctor_id:
                 await bot.send_message(int(doctor_id), f"⚠️ Клиент заблокировал бота. Консультация завершена.")
-            await db.execute('UPDATE consultations SET status = "blocked" WHERE client_id = ? AND status = "active"', (chat_id,))
+            await db.execute("UPDATE consultations SET status = 'blocked' WHERE client_id = ? AND status = 'active'", (chat_id,))
             await db.commit()
         return None
     except TelegramRetryAfter as e:

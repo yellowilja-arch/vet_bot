@@ -126,7 +126,7 @@ async def load_doctors_from_db():
     global DOCTOR_IDS
     db = await get_db()
     cursor = await db.execute(
-        "SELECT telegram_id, specialization FROM doctors WHERE is_active = 1"
+        "SELECT telegram_id, specialization FROM doctors WHERE is_active IS TRUE"
     )
     rows = await cursor.fetchall()
 
@@ -207,15 +207,17 @@ async def init_doctors():
         for doc in doctors:
             await db.execute(
                 """
-                INSERT OR IGNORE INTO doctors (telegram_id, name, specialization, is_active)
-                VALUES (?, ?, ?, 1)
+                INSERT INTO doctors (telegram_id, name, specialization, is_active)
+                VALUES (?, ?, ?, TRUE)
+                ON CONFLICT (telegram_id) DO NOTHING
                 """,
                 (doc["id"], doc["name"], spec),
             )
             await db.execute(
                 """
-                INSERT OR IGNORE INTO doctor_specializations (telegram_id, specialization)
+                INSERT INTO doctor_specializations (telegram_id, specialization)
                 VALUES (?, ?)
+                ON CONFLICT (telegram_id, specialization) DO NOTHING
                 """,
                 (doc["id"], spec),
             )
@@ -279,8 +281,8 @@ async def get_all_doctors():
     cur = await db.execute(
         """
         SELECT telegram_id, name, specialization FROM doctors
-        WHERE is_active = 1
-        ORDER BY name COLLATE NOCASE
+        WHERE is_active IS TRUE
+        ORDER BY LOWER(name)
         """
     )
     rows = await cur.fetchall()
@@ -344,7 +346,7 @@ async def is_active_public_doctor(telegram_id: int) -> bool:
         return False
     db = await get_db()
     cursor = await db.execute(
-        "SELECT 1 FROM doctors WHERE telegram_id = ? AND is_active = 1",
+        "SELECT 1 FROM doctors WHERE telegram_id = ? AND is_active IS TRUE",
         (telegram_id,),
     )
     return await cursor.fetchone() is not None
@@ -360,11 +362,11 @@ async def list_distinct_specializations_active() -> list[str]:
             SELECT ds.specialization AS spec
             FROM doctor_specializations ds
             INNER JOIN doctors d ON d.telegram_id = ds.telegram_id
-            WHERE d.is_active = 1 AND d.telegram_id >= ?
+            WHERE d.is_active IS TRUE AND d.telegram_id >= ?
             UNION
             SELECT d.specialization AS spec
             FROM doctors d
-            WHERE d.is_active = 1 AND d.telegram_id >= ?
+            WHERE d.is_active IS TRUE AND d.telegram_id >= ?
               AND TRIM(COALESCE(d.specialization, '')) != ''
               AND NOT EXISTS (
                   SELECT 1 FROM doctor_specializations z WHERE z.telegram_id = d.telegram_id
@@ -390,7 +392,7 @@ async def is_universal_topic_menu_available() -> bool:
     """Кнопка универсальной темы, если назначенный врач есть в БД и активен."""
     db = await get_db()
     cur = await db.execute(
-        "SELECT 1 FROM doctors WHERE telegram_id = ? AND is_active = 1",
+        "SELECT 1 FROM doctors WHERE telegram_id = ? AND is_active IS TRUE",
         (UNIVERSAL_TOPIC_DOCTOR_ID,),
     )
     return await cur.fetchone() is not None
@@ -419,7 +421,7 @@ async def list_active_doctor_ids_for_specialization(spec_key: str) -> list[int]:
         SELECT ds.telegram_id
         FROM doctor_specializations ds
         INNER JOIN doctors d ON d.telegram_id = ds.telegram_id
-        WHERE d.is_active = 1 AND ds.specialization = ? AND d.telegram_id >= ?
+        WHERE d.is_active IS TRUE AND ds.specialization = ? AND d.telegram_id >= ?
         ORDER BY ds.telegram_id
         """,
         (spec_key, REAL_TELEGRAM_USER_ID_MIN),
@@ -464,8 +466,12 @@ async def add_doctor(
     db = await get_db()
     await db.execute(
         """
-        INSERT OR REPLACE INTO doctors (telegram_id, name, specialization, is_active)
-        VALUES (?, ?, ?, 1)
+        INSERT INTO doctors (telegram_id, name, specialization, is_active)
+        VALUES (?, ?, ?, TRUE)
+        ON CONFLICT (telegram_id) DO UPDATE SET
+            name = EXCLUDED.name,
+            specialization = EXCLUDED.specialization,
+            is_active = EXCLUDED.is_active
         """,
         (telegram_id, name, prim),
     )
@@ -510,7 +516,7 @@ async def update_doctor(
     if is_active is not None:
         await db.execute(
             "UPDATE doctors SET is_active = ? WHERE telegram_id = ?",
-            (1 if is_active else 0, telegram_id),
+            (is_active, telegram_id),
         )
     if specializations is not None:
         keys = ordered_spec_keys(list(dict.fromkeys(specializations)))
@@ -546,7 +552,7 @@ async def remove_doctor(telegram_id: int):
     """Деактивирует врача (soft delete)."""
     db = await get_db()
     await db.execute(
-        "UPDATE doctors SET is_active = 0 WHERE telegram_id = ?", (telegram_id,)
+        "UPDATE doctors SET is_active = FALSE WHERE telegram_id = ?", (telegram_id,)
     )
     await db.commit()
     await load_doctors_from_db()

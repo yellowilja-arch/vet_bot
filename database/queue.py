@@ -55,7 +55,7 @@ async def pop_from_queue(topic: str):
     
     db = await get_db()
     async with _db_lock:
-        await db.execute('UPDATE queue SET status = "processing" WHERE id = ?', (queue_id,))
+        await db.execute("UPDATE queue SET status = 'processing' WHERE id = ?", (queue_id,))
         await db.commit()
         r.srem(f"queue_set:{topic}", user_id)
     
@@ -74,7 +74,7 @@ async def return_queue_item_to_tail(topic: str, user_id: int, anonymous_id: str,
     db = await get_db()
     async with _db_lock:
         await db.execute(
-            'UPDATE queue SET status = "waiting" WHERE id = ?',
+            "UPDATE queue SET status = 'waiting' WHERE id = ?",
             (queue_id,),
         )
         await db.commit()
@@ -84,7 +84,7 @@ async def confirm_queue_processed(queue_id: int):
     """Подтверждает успешную обработку клиента из очереди"""
     db = await get_db()
     async with _db_lock:
-        await db.execute('UPDATE queue SET status = "processed" WHERE id = ?', (queue_id,))
+        await db.execute("UPDATE queue SET status = 'processed' WHERE id = ?", (queue_id,))
         await db.commit()
 
 
@@ -133,8 +133,8 @@ async def remove_from_queue(topic: str, user_id: int):
     db = await get_db()
     async with _db_lock:
         await db.execute('''
-            UPDATE queue SET status = "cancelled"
-            WHERE user_id = ? AND status = "waiting"
+            UPDATE queue SET status = 'cancelled'
+            WHERE user_id = ? AND status = 'waiting'
         ''', (user_id,))
         await db.commit()
 
@@ -159,14 +159,14 @@ async def restore_queue_from_db():
         cursor = await db.execute('''
             SELECT user_id, anonymous_id, id FROM queue
             WHERE topic = ? AND status = 'processing' 
-            AND created_at < datetime('now', '-60 seconds')
+            AND created_at < NOW() - INTERVAL '60 seconds'
             ORDER BY id
         ''', (topic,))
         rows = await cursor.fetchall()
         for user_id, anonymous_id, queue_id in rows:
             r.rpush(f"queue:{topic}", f"{user_id}:{anonymous_id}:{queue_id}")
             r.sadd(f"queue_set:{topic}", user_id)
-            await db.execute('UPDATE queue SET status = "waiting" WHERE id = ?', (queue_id,))
+            await db.execute("UPDATE queue SET status = 'waiting' WHERE id = ?", (queue_id,))
         await db.commit()
         
         print(f"🔄 Восстановлена очередь {topic}: {len(rows)} клиентов")
@@ -215,7 +215,7 @@ async def clear_queue(topic: str) -> tuple[list[int], list[int], int]:
         cursor = await db.execute(
             """
             SELECT DISTINCT user_id FROM queue
-            WHERE topic = ? AND status IN ("waiting", "processing")
+            WHERE topic = ? AND status IN ('waiting', 'processing')
             """,
             (topic,),
         )
@@ -251,8 +251,8 @@ async def clear_queue(topic: str) -> tuple[list[int], list[int], int]:
     async with _db_lock:
         await db.execute(
             """
-            UPDATE queue SET status = "cancelled"
-            WHERE topic = ? AND status IN ("waiting", "processing")
+            UPDATE queue SET status = 'cancelled'
+            WHERE topic = ? AND status IN ('waiting', 'processing')
             """,
             (topic,),
         )

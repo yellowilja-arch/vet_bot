@@ -1441,10 +1441,11 @@ async def rate_doctor(call: CallbackQuery):
     
     from database.db import get_db
     db = await get_db()
-    await db.execute('''
-        INSERT OR IGNORE INTO doctor_ratings (doctor_id, client_id, consultation_id, rating)
+    await db.execute("""
+        INSERT INTO doctor_ratings (doctor_id, client_id, consultation_id, rating)
         VALUES (?, ?, ?, ?)
-    ''', (doctor_id, user_id, consultation_id, rating))
+        ON CONFLICT (client_id, consultation_id) DO NOTHING
+    """, (doctor_id, user_id, consultation_id, rating))
     await db.commit()
     
     await call.message.edit_text(f"⭐ Спасибо за оценку! Вы поставили {rating}")

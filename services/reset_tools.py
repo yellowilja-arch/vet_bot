@@ -19,10 +19,10 @@ async def reset_user_state(user_id: int):
     
     # Закрываем консультацию в БД
     db = await get_db()
-    await db.execute('''
-        UPDATE consultations SET status = "cancelled"
-        WHERE client_id = ? AND status = "active"
-    ''', (user_id,))
+    await db.execute("""
+        UPDATE consultations SET status = 'cancelled'
+        WHERE client_id = ? AND status = 'active'
+    """, (user_id,))
     await db.commit()
 
 async def reset_doctor_state(doctor_id: int):
@@ -34,10 +34,10 @@ async def reset_all_states():
     """Сбрасывает все состояния (для админа)"""
     # Очищаем все активные консультации в БД
     db = await get_db()
-    await db.execute('''
-        UPDATE consultations SET status = "cancelled"
-        WHERE status = "active"
-    ''')
+    await db.execute("""
+        UPDATE consultations SET status = 'cancelled'
+        WHERE status = 'active'
+    """)
     await db.commit()
     
     # Очищаем Redis
@@ -55,10 +55,10 @@ async def reset_all_states():
 async def close_stuck_requests():
     """Закрывает зависшие запросы (старше 24 часов)"""
     db = await get_db()
-    await db.execute('''
-        UPDATE consultations SET status = "auto_ended"
-        WHERE status = "active" AND created_at < datetime('now', '-1 day')
-    ''')
+    await db.execute("""
+        UPDATE consultations SET status = 'auto_ended'
+        WHERE status = 'active' AND created_at < NOW() - INTERVAL '1 day'
+    """)
     await db.commit()
 
 async def unlock_all_doctors():

@@ -33,7 +33,7 @@ async def _auto_close_client_idle(doctor_id: int, client_id: int) -> None:
     """15 мин ожидания ответа клиента — закрыть консультацию без оценки (как в ТЗ)."""
     db = await get_db()
     cursor = await db.execute(
-        'SELECT id FROM consultations WHERE client_id = ? AND status = "active"',
+        "SELECT id FROM consultations WHERE client_id = ? AND status = 'active'",
         (client_id,),
     )
     row = await cursor.fetchone()

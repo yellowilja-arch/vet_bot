@@ -176,10 +176,14 @@ async def _apply_doctor_row(
     db = await get_db()
     await db.execute(
         """
-        INSERT OR REPLACE INTO doctors (telegram_id, name, specialization, is_active)
+        INSERT INTO doctors (telegram_id, name, specialization, is_active)
         VALUES (?, ?, ?, ?)
+        ON CONFLICT (telegram_id) DO UPDATE SET
+            name = EXCLUDED.name,
+            specialization = EXCLUDED.specialization,
+            is_active = EXCLUDED.is_active
         """,
-        (telegram_id, name, prim, 1 if is_active else 0),
+        (telegram_id, name, prim, is_active),
     )
     await db.execute(
         "DELETE FROM doctor_specializations WHERE telegram_id = ?",

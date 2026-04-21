@@ -8,7 +8,7 @@ import redis.asyncio as redis_async
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.types import ErrorEvent
 import os
-from config import BOT_TOKEN, ADMIN_IDS, REDIS_URL, DB_PATH
+from config import BOT_TOKEN, ADMIN_IDS, REDIS_URL
 from handlers import register_handlers
 from services.bot_commands import default_scope_commands
 from workers.backups import backup_worker
@@ -49,12 +49,13 @@ async def init_startup():
     from database.doctors import init_doctors
     
     logging.info("🚀 Инициализирую БД и врачей...")
-    logging.info("📂 SQLite путь: %s", os.path.abspath(DB_PATH))
+    _dsn = (os.getenv("DATABASE_URL") or os.getenv("PGDATABASE_URL") or "").strip()
+    if "@" in _dsn:
+        _safe = _dsn.split("@", 1)[-1]
+        logging.info("🐘 PostgreSQL: …@%s", _safe[:80])
+    else:
+        logging.info("🐘 PostgreSQL: DATABASE_URL задан")
     if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_NAME"):
-        logging.info(
-            "Railway: данные сохраняются между редеплоями только если этот путь на смонтированном Volume "
-            "(часто /data). Проверьте настройки тома в панели Railway."
-        )
         from config import DOCTORS_SYNC_PULL_URL
 
         if DOCTORS_SYNC_PULL_URL:
@@ -75,7 +76,7 @@ async def init_startup():
     import redis
     r = redis.from_url(REDIS_URL, decode_responses=True)
     db = await get_db()
-    cursor = await db.execute('SELECT client_id, doctor_id, id FROM consultations WHERE status = "active"')
+    cursor = await db.execute("SELECT client_id, doctor_id, id FROM consultations WHERE status = 'active'")
     rows = await cursor.fetchall()
     from services.dialog_session import init_dialog_after_consultation_start
 
@@ -131,7 +132,7 @@ async def shutdown():
 
         await close_db_connection()
     except Exception as e:
-        logging.warning("Не удалось корректно закрыть SQLite: %s", e)
+        logging.warning("Не удалось корректно закрыть пул PostgreSQL: %s", e)
     await redis_client.aclose()
     await bot.session.close()
     sys.exit(0)

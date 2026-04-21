@@ -18,7 +18,7 @@ async def save_user_if_new(user_id: int, username: str = None, first_name: str =
             print(f"📝 Новый пользователь сохранён: {user_id} (@{username})")
         except Exception as e:
             # Игнорируем ситуацию гонки, если пользователь уже добавлен
-            if 'UNIQUE constraint failed' in str(e):
+            if "UNIQUE constraint failed" in str(e) or "duplicate key" in str(e).lower():
                 logging.info(f"Пользователь уже есть в БД: {user_id}")
             else:
                 raise

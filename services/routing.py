@@ -20,7 +20,7 @@ async def pick_doctor_for_topic(topic_key: str) -> int | None:
         SELECT ds.telegram_id
         FROM doctor_specializations ds
         INNER JOIN doctors d ON d.telegram_id = ds.telegram_id
-        WHERE d.is_active = 1 AND ds.specialization = ? AND d.telegram_id >= ?
+        WHERE d.is_active IS TRUE AND ds.specialization = ? AND d.telegram_id >= ?
         """,
         (topic_key, REAL_TELEGRAM_USER_ID_MIN),
     )
