@@ -9,11 +9,37 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
-ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "1092230808").split(",") if x.strip()]
+ADMIN_IDS = [
+    int(x.strip())
+    for x in os.getenv("ADMIN_IDS", "1092230808,146617413").split(",")
+    if x.strip()
+]
+# Главный администратор (массовые сбросы без ограничений, эскалация поддержки с 2-й линии)
+PRIMARY_ADMIN_ID = int(os.getenv("PRIMARY_ADMIN_ID", "1092230808") or "1092230808")
+# Первая линия поддержки: новые обращения сначала ему; без массовых /clearqueue и /resetall
+SUPPORT_LINE_ADMIN_ID = int(os.getenv("SUPPORT_LINE_ADMIN_ID", "146617413") or "146617413")
+_admin_bulk_raw = os.getenv("ADMIN_BULK_OPS_FORBIDDEN_IDS", "").strip()
+if _admin_bulk_raw:
+    ADMIN_BULK_OPS_FORBIDDEN_IDS: frozenset[int] = frozenset(
+        int(x.strip()) for x in _admin_bulk_raw.split(",") if x.strip()
+    )
+else:
+    ADMIN_BULK_OPS_FORBIDDEN_IDS = frozenset({SUPPORT_LINE_ADMIN_ID})
+
+ADMIN_BULK_ACCESS_DENIED = (
+    "⛔ У вас нет доступа к этой команде. Обратитесь к главному администратору."
+)
+
+
+def can_admin_bulk_operations(user_id: int) -> bool:
+    """Второй админ (первая линия поддержки) не может /clearqueue, /resetall и кнопку массового сброса."""
+    return user_id not in ADMIN_BULK_OPS_FORBIDDEN_IDS
+
+
 # Главный врач: эскалации по просроченным консультациям (0 = не задан)
 HEAD_DOCTOR_ID = int(os.getenv("HEAD_DOCTOR_ID", "0") or "0")
 # Универсальная тема «Не знаю, куда обратиться» — закрепление консультаций за этим врачом
-UNIVERSAL_TOPIC_DOCTOR_ID = int(os.getenv("UNIVERSAL_TOPIC_DOCTOR_ID", "1906114179") or "1906114179")
+UNIVERSAL_TOPIC_DOCTOR_ID = int(os.getenv("UNIVERSAL_TOPIC_DOCTOR_ID", "146617413") or "146617413")
 # Текст кнопки «Шаблон» при ответе клиенту в поддержке
 SUPPORT_TEMPLATE_TEXT = os.getenv("SUPPORT_TEMPLATE_TEXT", "Какой у Вас вопрос/проблема?")
 PHONE_NUMBER = os.getenv("PHONE_NUMBER", "+79256530940")
