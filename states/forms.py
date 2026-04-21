@@ -19,7 +19,6 @@ class QuestionnaireState(StatesGroup):
     waiting_chronic = State()      # Хронические заболевания
     waiting_recent_illness = State()  # Болезни за последний месяц
     waiting_vaccination = State()  # Комплексная вакцинация
-    waiting_sterilization = State()  # Кастрация / стерилизация
 
 
 class WaitingState(StatesGroup):
