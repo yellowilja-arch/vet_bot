@@ -4,7 +4,13 @@ from aiogram.filters import Command, StateFilter
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from html import escape
-from config import ADMIN_IDS, REDIS_URL, SUPPORT_TEMPLATE_TEXT
+from config import (
+    ADMIN_IDS,
+    ADMIN_BULK_ACCESS_DENIED,
+    REDIS_URL,
+    SUPPORT_TEMPLATE_TEXT,
+    can_admin_bulk_operations,
+)
 from services.validators import (
     get_doctor_status,
     is_admin,
@@ -72,6 +78,7 @@ _ADMIN_INTERRUPTIBLE_STATES = (
     AdminState.waiting_unban_user_id,
     AdminState.waiting_remove_doctor_id,
     AdminState.waiting_resetall_confirm,
+    AdminState.waiting_resetuser_id,
     AdminState.add_doctor_telegram,
     AdminState.add_doctor_name,
     AdminState.add_doctor_pick_spec,
@@ -248,6 +255,9 @@ async def admin_clear_queue(message: Message):
     """Сброс Redis/SQLite очереди (в т.ч. после тестов с битым client_id)."""
     user_id = message.from_user.id
     if not await user_in_admin_context(user_id):
+        return
+    if not can_admin_bulk_operations(user_id):
+        await safe_send_message(user_id, ADMIN_BULK_ACCESS_DENIED)
         return
     affected, notify_ids, n_active_closed = await clear_queue("all")
     for uid in notify_ids:
@@ -488,28 +498,56 @@ async def get_user(message: Message):
 
 
 @router.message(Command("resetuser"))
-async def reset_user(message: Message):
+async def reset_user(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if not await user_in_admin_context(user_id):
         return
 
-    args = message.text.split()
-    if len(args) != 2:
-        await safe_send_message(user_id, "⚠️ /resetuser <user_id>")
+    args = (message.text or "").split()
+    if len(args) >= 2:
+        target_id = _parse_int(args[1])
+        if target_id is None:
+            await safe_send_message(user_id, "⚠️ user_id должен быть числом")
+            return
+        await state.clear()
+        await reset_user_state(target_id)
+        await safe_send_message(user_id, f"✅ Состояние пользователя {target_id} сброшено")
         return
-    
-    target_id = _parse_int(args[1])
+
+    await state.set_state(AdminState.waiting_resetuser_id)
+    await safe_send_message(
+        user_id,
+        "Введите <b>Telegram ID</b> пользователя для сброса состояния.\n"
+        "Или одной строкой: <code>/resetuser &lt;id&gt;</code>\n"
+        "/cancel — отмена.",
+        parse_mode="HTML",
+    )
+
+
+@router.message(AdminState.waiting_resetuser_id, F.text)
+async def reset_user_receive_id(message: Message, state: FSMContext):
+    admin_uid = message.from_user.id
+    if not await user_in_admin_context(admin_uid):
+        return
+    raw = (message.text or "").strip()
+    if raw.startswith("/"):
+        return
+    target_id = _parse_int(raw)
     if target_id is None:
-        await safe_send_message(user_id, "⚠️ user_id должен быть числом")
+        await safe_send_message(admin_uid, "⚠️ Нужен числовой ID. Повторите ввод или /cancel.")
         return
+    await state.clear()
     await reset_user_state(target_id)
-    await safe_send_message(user_id, f"✅ Состояние пользователя {target_id} сброшено")
+    await safe_send_message(admin_uid, f"✅ Состояние пользователя {target_id} сброшено")
 
 
 @router.message(Command("resetall"))
 async def reset_all(message: Message):
     user_id = message.from_user.id
     if not await user_in_admin_context(user_id):
+        return
+    if not can_admin_bulk_operations(user_id):
+        await safe_send_message(user_id, ADMIN_BULK_ACCESS_DENIED)
         return
 
     await reset_all_states()
@@ -520,6 +558,9 @@ async def reset_all(message: Message):
 async def reset_all_button(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if not await user_in_admin_context(user_id):
+        return
+    if not can_admin_bulk_operations(user_id):
+        await safe_send_message(user_id, ADMIN_BULK_ACCESS_DENIED)
         return
     await state.set_state(AdminState.waiting_resetall_confirm)
     await safe_send_message(
@@ -535,6 +576,10 @@ async def reset_all_button(message: Message, state: FSMContext):
 async def reset_all_confirm(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if not await user_in_admin_context(user_id):
+        return
+    if not can_admin_bulk_operations(user_id):
+        await state.clear()
+        await safe_send_message(user_id, ADMIN_BULK_ACCESS_DENIED)
         return
     if (message.text or "").strip() != "ДА":
         await safe_send_message(user_id, "Отправьте ровно «ДА» или /cancel")
