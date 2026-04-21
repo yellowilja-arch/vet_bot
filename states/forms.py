@@ -30,6 +30,7 @@ class WaitingState(StatesGroup):
     waiting_for_feedback = State()         # Ожидание обратной связи
     waiting_for_rating_comment = State()   # Ожидание комментария к оценке
     waiting_universal_problem_description = State()  # Универсальная тема: описание до оплаты
+    picking_problem = State()  # Выбор сценария внутри категории
 
 
 class AdminState(StatesGroup):

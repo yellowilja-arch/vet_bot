@@ -32,6 +32,16 @@ async def get_user_info(user_id: int):
     ''', (user_id,))
     return await cursor.fetchone()
 
+async def touch_user_last_seen(user_id: int) -> None:
+    """Обновить last_seen (например после /start)."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE users SET last_seen = NOW() WHERE user_id = ?",
+        (user_id,),
+    )
+    await db.commit()
+
+
 async def get_recent_users(limit: int = 50):
     """Возвращает последних пользователей"""
     db = await get_db()

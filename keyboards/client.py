@@ -10,37 +10,25 @@ TEXT_BTN_OUR_DOCTORS = "📋 Наши врачи"
 
 
 
-def get_main_keyboard(topic_button_labels: list[str]) -> ReplyKeyboardMarkup:
-
-    """
-
-    Главное меню клиента: только темы (подписи из SPECIALISTS) + сервисные кнопки.
-
-    topic_button_labels — подписи тем (есть активные врачи в клинике).
-
-    """
-
-    buttons = []
-
-    for label in topic_button_labels:
-
-        buttons.append([KeyboardButton(text=label)])
-
+def get_main_keyboard(category_labels: list[str], universal_label: str) -> ReplyKeyboardMarkup:
+    """Главное меню: категории проблем, универсальная тема, врачи и сервис."""
+    buttons: list[list[KeyboardButton]] = [[KeyboardButton(text=label)] for label in category_labels]
+    buttons.append([KeyboardButton(text=universal_label)])
     buttons.append(
-
         [
-
             KeyboardButton(text=TEXT_BTN_OUR_DOCTORS),
-
             KeyboardButton(text="📋 Мои консультации"),
-
         ]
-
     )
-
     buttons.append([KeyboardButton(text="🆘 Помощь")])
-
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def get_category_problems_keyboard(problem_button_labels: list[str]) -> ReplyKeyboardMarkup:
+    """Список сценариев в категории + назад."""
+    rows = [[KeyboardButton(text=name)] for name in problem_button_labels]
+    rows.append([KeyboardButton(text="🔙 Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 

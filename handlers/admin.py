@@ -8,6 +8,8 @@ from config import ADMIN_IDS, REDIS_URL, SUPPORT_TEMPLATE_TEXT
 from services.validators import (
     get_doctor_status,
     is_admin,
+    is_doctor,
+    is_blocked,
     user_in_admin_context,
     user_in_client_context,
 )
@@ -396,43 +398,93 @@ async def admin_health_button(message: Message):
     await _reply_admin_health(user_id)
 
 
+def _format_ts_for_admin(val) -> str:
+    if val is None:
+        return "—"
+    if hasattr(val, "strftime"):
+        return val.strftime("%Y-%m-%d %H:%M:%S")
+    return str(val)
+
+
 @router.message(Command("user"))
 async def get_user(message: Message):
-    user_id = message.from_user.id
-    if not await user_in_admin_context(user_id):
+    admin_uid = message.from_user.id
+    if not await user_in_admin_context(admin_uid):
+        await safe_send_message(admin_uid, "⛔ Только для админов. /admin")
         return
 
-    args = message.text.split()
-    if len(args) != 2:
-        await safe_send_message(user_id, "⚠️ /user <user_id> или /user @username")
+    raw = (message.text or "").strip()
+    parts = raw.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await safe_send_message(
+            admin_uid,
+            "⚠️ Использование: /user <user_id> или /user @username",
+        )
         return
-    
-    identifier = args[1]
+
+    identifier = parts[1].strip()
     db = await get_db()
-    
+
     if identifier.startswith("@"):
-        cursor = await db.execute('SELECT * FROM users WHERE username = ?', (identifier[1:],))
+        uname = identifier[1:].strip()
+        if not uname:
+            await safe_send_message(
+                admin_uid,
+                "⚠️ Использование: /user <user_id> или /user @username",
+            )
+            return
+        cursor = await db.execute(
+            "SELECT user_id, username, first_name, last_name, full_name, first_seen, last_seen "
+            "FROM users WHERE LOWER(username) = LOWER(?)",
+            (uname,),
+        )
     else:
         numeric_id = _parse_int(identifier)
         if numeric_id is None:
-            await safe_send_message(user_id, "⚠️ user_id должен быть числом или @username")
+            await safe_send_message(admin_uid, "⚠️ user_id должен быть числом или @username")
             return
-        cursor = await db.execute('SELECT * FROM users WHERE user_id = ?', (numeric_id,))
-    
+        cursor = await db.execute(
+            "SELECT user_id, username, first_name, last_name, full_name, first_seen, last_seen "
+            "FROM users WHERE user_id = ?",
+            (numeric_id,),
+        )
+
     user = await cursor.fetchone()
-    
+
     if not user:
-        await safe_send_message(user_id, f"❌ Пользователь {identifier} не найден.")
+        await safe_send_message(admin_uid, f"❌ Пользователь {identifier} не найден.")
         return
-    
-    text = f"📋 <b>Информация о пользователе</b>\n\n"
-    text += f"🆔 ID: {user[0]}\n"
-    text += f"👤 Username: @{user[1] or 'нет'}\n"
-    text += f"📛 Имя: {user[2] or 'нет'} {user[3] or ''}\n"
-    text += f"📅 Первое появление: {user[5]}\n"
-    text += f"📅 Последнее: {user[6]}"
-    
-    await safe_send_message(user_id, text, parse_mode="HTML")
+
+    tid = int(user["user_id"])
+    un = user["username"]
+    fn = user["first_name"] or ""
+    ln = user["last_name"] or ""
+    name_disp = (user["full_name"] or f"{fn} {ln}".strip() or "—").strip()
+
+    role_parts: list[str] = []
+    if tid in ADMIN_IDS:
+        role_parts.append("Админ")
+    if await is_doctor(tid):
+        role_parts.append("Врач")
+    role_str = " + ".join(role_parts) if role_parts else "Клиент"
+
+    blocked = await is_blocked(tid)
+    blocked_str = "Да" if blocked else "Нет"
+
+    un_disp = f"@{un}" if un else "—"
+
+    text = (
+        "📋 <b>ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ</b>\n\n"
+        f"🆔 ID: {tid}\n"
+        f"👤 Username: {escape(un_disp)}\n"
+        f"📛 Имя: {escape(name_disp)}\n"
+        f"📅 Первое появление: {_format_ts_for_admin(user['first_seen'])}\n"
+        f"📅 Последнее посещение: {_format_ts_for_admin(user['last_seen'])}\n"
+        f"👔 Роль: {escape(role_str)}\n"
+        f"🚫 Заблокирован: {blocked_str}"
+    )
+
+    await safe_send_message(admin_uid, text, parse_mode="HTML")
 
 
 @router.message(Command("resetuser"))
