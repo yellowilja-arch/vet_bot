@@ -224,8 +224,7 @@ async def execute_take_client(
             f"📂 <b>Специализация:</b> {escape(spec_display)}\n"
             f"🆔 <b>ID консультации:</b> #{consultation_id}\n\n"
             "💬 Напишите сообщение, чтобы задать вопрос врачу.\n"
-            "📎 Вы можете отправлять фото, видео и документы.\n\n"
-            "❌ Для завершения консультации используйте команду <b>/end</b>"
+            "📎 Вы можете отправлять фото, видео и документы."
         ),
         parse_mode="HTML",
         reply_markup=ReplyKeyboardRemove(),
