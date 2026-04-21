@@ -45,6 +45,7 @@ from database.doctors import (
     list_online_doctor_ids_for_specialization,
     get_public_doctors_for_client,
     is_active_public_doctor,
+    reconcile_online_presence_from_db,
     specializations_slash_plain,
 )
 from database.consultations import (
@@ -199,6 +200,7 @@ async def _build_our_doctors_message_and_keyboard():
     db_rows = await get_public_doctors_for_client()
     if not db_rows:
         return None, None
+    await reconcile_online_presence_from_db([int(r[0]) for r in db_rows])
     lines_body = ["👨‍⚕️ <b>НАШИ ВРАЧИ</b>\n", "Выберите специалиста:\n"]
     btn_rows: list[tuple[int, str]] = []
     for telegram_id, name, spec_keys in db_rows:
@@ -496,6 +498,7 @@ async def our_doctor_selected(call: CallbackQuery, state: FSMContext):
     if not await is_active_public_doctor(tid):
         await call.answer("Этот врач недоступен в списке.", show_alert=True)
         return
+    await reconcile_online_presence_from_db([tid])
     name = await get_doctor_name(tid)
     online = safe_get_doctor_status(tid) == "online"
     busy = safe_get_current_client(tid) is not None
