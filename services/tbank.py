@@ -19,6 +19,13 @@ TBANK_TERMINAL_KEY = getattr(app_config, "TBANK_TERMINAL_KEY", None) or ""
 
 logger = logging.getLogger(__name__)
 
+# Сервисы банка иногда отсекают дефолтный User-Agent aiohttp → 403 от nginx. Используем явный JSON-клиент.
+_TBANK_DEFAULT_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "User-Agent": "VetBot/1.0 (Python; T-Bank eAcquiring API; +https://www.tbank.ru/business/online-payments/)",
+}
+
 
 def tbank_token_from_root_params(params: dict[str, Any], password: str) -> str:
     """
@@ -77,12 +84,34 @@ async def tbank_init_payment(
         session = aiohttp.ClientSession()
         close_session = True
     try:
-        async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+        async with session.post(
+            url,
+            json=payload,
+            headers=_TBANK_DEFAULT_HEADERS,
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
             text = await resp.text()
+            if resp.status != 200:
+                logger.error(
+                    "T-Bank Init: HTTP %s, не JSON-ответ. Тело: %s",
+                    resp.status,
+                    text[:800],
+                )
+                if resp.status == 403:
+                    logger.error(
+                        "T-Bank Init: 403 — часто блок на стороне банка (WAF/гео/IP). "
+                        "Проверьте: 1) TerminalKey/Password; 2) исходящий IP (Railway) в белом списке у Т-Банка; "
+                        "3) для тестовой среды rest-api-test.tinkoff.ru — IP в чате личного кабинета "
+                        "см. https://developer.tbank.ru/eacq/intro/errors/test"
+                    )
+                return {
+                    "Success": False,
+                    "Message": f"HTTP {resp.status} от {TBANK_API_BASE or 'T-Bank'}",
+                }
             try:
                 data = json.loads(text)
             except json.JSONDecodeError:
-                logger.error("T-Bank Init: не JSON: %s", text[:500])
+                logger.error("T-Bank Init: не JSON (status=%s): %s", resp.status, text[:500])
                 return {"Success": False, "Message": "Invalid JSON from bank"}
             if not data.get("Success"):
                 logger.warning("T-Bank Init отказ: %s", data)
