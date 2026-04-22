@@ -268,7 +268,7 @@ async def admin_fsm_clear_on_start(message: Message, state: FSMContext):
 
 @router.message(Command("clearqueue"))
 async def admin_clear_queue(message: Message):
-    """Сброс Redis/SQLite очереди (в т.ч. после тестов с битым client_id)."""
+    """Сброс Redis и таблицы очереди в PostgreSQL (в т.ч. после тестов с битым client_id)."""
     user_id = message.from_user.id
     if not await user_in_admin_context(user_id):
         return
@@ -295,14 +295,14 @@ async def admin_clear_queue(message: Message):
     )
 
 
-async def _admin_send_sqlite_backup(
+async def _admin_send_postgres_backup_hint(
     bot,
     admin_id: int,
     attach_to_message: Message | None,
     *,
     announce_progress: bool = True,
 ) -> None:
-    """Ранее: файл SQLite. Сейчас БД — PostgreSQL; используйте бэкап Railway / pg_dump."""
+    """Подсказка по бэкапу: данные только в PostgreSQL (Railway / pg_dump)."""
     if not await user_in_admin_context(admin_id):
         await safe_send_message(admin_id, "⛔ Только для администраторов")
         return
@@ -318,7 +318,7 @@ async def _admin_send_sqlite_backup(
 @router.message(F.text == "💾 Бэкап")
 async def admin_backup_reply_button(message: Message):
     """Reply-кнопка «💾 Бэкап» в панели администратора."""
-    await _admin_send_sqlite_backup(message.bot, message.from_user.id, message)
+    await _admin_send_postgres_backup_hint(message.bot, message.from_user.id, message)
 
 
 @router.callback_query(F.data == "admin_backup")
@@ -329,7 +329,7 @@ async def admin_backup_callback(call: CallbackQuery):
         await call.answer("⛔ Только для администраторов", show_alert=True)
         return
     await call.answer("⏳ Создаю бэкап...")
-    await _admin_send_sqlite_backup(call.bot, admin_id, call.message, announce_progress=False)
+    await _admin_send_postgres_backup_hint(call.bot, admin_id, call.message, announce_progress=False)
 
 
 @router.message(Command("stats"))

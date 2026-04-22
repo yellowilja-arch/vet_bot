@@ -21,7 +21,7 @@ REAL_TELEGRAM_USER_ID_MIN = 1
 # При старте удаляем только явные числовые заглушки из старых сидов (не реальные аккаунты).
 DOCTOR_STUB_TELEGRAM_ID_MAX = 99
 
-# Частые опечатки / старые значения (в т.ч. из ручного jsonbin) → канонический ключ из SPECIALISTS.
+# Частые опечатки / старые значения в БД → канонический ключ из SPECIALISTS.
 SPECIALIZATION_KEY_ALIASES: dict[str, str] = {
     "therapy": "therapist",
     "therapies": "therapist",
@@ -194,7 +194,7 @@ async def load_doctors_from_db():
 async def repair_specialization_keys_in_db() -> None:
     """
     Перезаписывает doctor_specializations и поле doctors.specialization каноническими ключами.
-    Нужно после импорта jsonbin или если в БД попали опечатки — иначе темы клиентского меню пустые.
+    Нужно если в БД попали опечатки в специализациях — иначе темы клиентского меню пустые.
     """
     db = await get_db()
     cur = await db.execute("SELECT telegram_id, specialization FROM doctors")
@@ -541,9 +541,6 @@ async def add_doctor(
         )
     await db.commit()
     await load_doctors_from_db()
-    from database.doctors_remote_sync import schedule_push_doctors_remote
-
-    schedule_push_doctors_remote()
 
 
 async def update_doctor(
@@ -595,9 +592,6 @@ async def update_doctor(
         )
     await db.commit()
     await load_doctors_from_db()
-    from database.doctors_remote_sync import schedule_push_doctors_remote
-
-    schedule_push_doctors_remote()
 
 
 async def remove_doctor(telegram_id: int):
@@ -608,6 +602,3 @@ async def remove_doctor(telegram_id: int):
     )
     await db.commit()
     await load_doctors_from_db()
-    from database.doctors_remote_sync import schedule_push_doctors_remote
-
-    schedule_push_doctors_remote()

@@ -84,30 +84,6 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 DATABASE_URL = (os.getenv("DATABASE_URL") or os.getenv("PGDATABASE_URL") or "").strip()
 
 # ============================================
-# Врачи: синхронизация по HTTP (без Volume на PaaS)
-# ============================================
-# При деплое контейнер часто получает пустой SQLite. Альтернатива тому — хранить
-# JSON со списком врачей во внешнем хранилище с HTTP API.
-#
-# Пример (jsonbin.io): создайте bin с начальным значением [].
-#   DOCTORS_SYNC_PULL_URL=https://api.jsonbin.io/v3/b/<BIN_ID>/latest
-#   DOCTORS_SYNC_PUSH_URL=https://api.jsonbin.io/v3/b/<BIN_ID>
-#   DOCTORS_SYNC_PUSH_METHOD=PUT
-#   DOCTORS_SYNC_HTTP_HEADERS={"X-Master-Key":"<ваш ключ>"}
-#
-# Проще для jsonbin: один ключ без JSON (если HTTP_HEADERS кривой или пустой):
-#   DOCTORS_SYNC_JSONBIN_MASTER_KEY=<ваш X-Master-Key>
-#
-# Ответ GET может быть массивом или обёрткой {"record":[...]} / {"doctors":[...]}.
-DOCTORS_SYNC_PULL_URL = (os.getenv("DOCTORS_SYNC_PULL_URL") or "").strip()
-DOCTORS_SYNC_PUSH_URL = (os.getenv("DOCTORS_SYNC_PUSH_URL") or "").strip()
-DOCTORS_SYNC_HTTP_HEADERS = (os.getenv("DOCTORS_SYNC_HTTP_HEADERS") or "").strip()
-DOCTORS_SYNC_PUSH_METHOD = (os.getenv("DOCTORS_SYNC_PUSH_METHOD") or "PUT").strip().upper()
-DOCTORS_SYNC_JSONBIN_MASTER_KEY = (
-    os.getenv("DOCTORS_SYNC_JSONBIN_MASTER_KEY") or os.getenv("JSONBIN_MASTER_KEY") or ""
-).strip()
-
-# ============================================
 # НАСТРОЙКИ ТАЙМАУТОВ
 # ============================================
 
@@ -124,7 +100,7 @@ from data.problems import SPECIALISTS, SPECIALIZATION_KEYS  # noqa: E402
 # Стоимость консультации при выборе темы из меню (динамический список из БД)
 DEFAULT_CONSULTATION_PRICE = 1300
 
-# Legacy: почти не используется (маршрутизация — pick_doctor_for_topic → SQLite).
+# Legacy: почти не используется (маршрутизация — pick_doctor_for_topic → БД).
 DOCTORS = {k: [] for k in SPECIALIZATION_KEYS}
 
 # Опциональный сид при первом запуске. Вымышленные ID < 1e9 удаляются при старте в init_doctors.

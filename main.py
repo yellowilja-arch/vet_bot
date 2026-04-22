@@ -56,23 +56,13 @@ async def init_startup():
         logging.info("🐘 PostgreSQL: …@%s", _safe[:80])
     else:
         logging.info("🐘 PostgreSQL: DATABASE_URL задан")
-    if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_NAME"):
-        from config import DOCTORS_SYNC_PULL_URL
-
-        if DOCTORS_SYNC_PULL_URL:
-            logging.info(
-                "Задан DOCTORS_SYNC_PULL_URL — список врачей будет подтягиваться из HTTP после старта БД."
-            )
 
     # Инициализация БД
     await init_db()
     
     # Инициализация врачей
     await init_doctors()
-    from database.doctors_remote_sync import pull_doctors_from_remote
 
-    await pull_doctors_from_remote()
-    
     # Восстановление активных консультаций
     import redis
     r = redis.from_url(REDIS_URL, decode_responses=True)
@@ -136,12 +126,6 @@ async def main():
 
 async def shutdown():
     logging.info("Завершение работы...")
-    try:
-        from database.doctors_remote_sync import push_doctors_to_remote
-
-        await push_doctors_to_remote()
-    except Exception as e:
-        logging.warning("DOCTORS_SYNC: финальная выгрузка не удалась: %s", e)
     try:
         from database.db import close_db_connection
 

@@ -7,7 +7,7 @@ from utils.helpers import safe_send_message
 
 
 async def create_backup():
-    """Ранее: копия SQLite в Yandex Cloud. Сейчас БД — PostgreSQL; файловый бэкап отключён."""
+    """Ранее: выгрузка файла БД. Сейчас только PostgreSQL; отдельный файловый дамп в облако не делаем."""
     logging.info("create_backup: PostgreSQL — используйте pg_dump / бэкапы провайдера")
     return "ℹ️ Бэкап файла .db отключён (PostgreSQL). Настройте pg_dump или снимки в панели БД."
 
@@ -22,7 +22,7 @@ async def backup_worker():
         for admin_id in ADMIN_IDS:
             await safe_send_message(
                 admin_id,
-                "ℹ️ <b>Бэкап</b>: бот на PostgreSQL. Файловый бэкап SQLite отключён. "
+                "ℹ️ <b>Бэкап</b>: бот на PostgreSQL. Автовыгрузка файла .db не используется. "
                 "Используйте бэкапы Postgres (Railway / pg_dump).\n"
                 f"<i>{ts}</i>",
                 parse_mode="HTML",

@@ -11,7 +11,7 @@ r = redis.from_url(REDIS_URL, decode_responses=True)
 async def pick_doctor_for_topic(topic_key: str) -> int | None:
     """
     Назначение врача по теме (ключ специализации из БД).
-    Источник — только SQLite doctors, не config.DOCTORS.
+    Источник — только таблицы `doctors` / `doctor_specializations` (PostgreSQL), не config.DOCTORS.
     Приоритет: онлайн без активного клиента, иначе любой онлайн; внутри группы — round-robin.
     """
     db = await get_db()

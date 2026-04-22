@@ -104,7 +104,7 @@ class PgCursor:
 
 
 class _PgConnectionFacade:
-    """Имитация соединения aiosqlite для существующего кода."""
+    """Фасад поверх asyncpg: прежний API с `?` в SQL (как в старом коде под aiosqlite)."""
 
     def __init__(self, pool: asyncpg.Pool):
         self._pool = pool
@@ -425,7 +425,7 @@ async def close_db_connection() -> None:
         _pool = None
 
 
-# Совместимость: старый код бэкапов SQLite
+# Совместимость: вызовы из старого кода бэкапов (WAL не используется в PostgreSQL)
 async def checkpoint_wal_for_backup() -> None:
     """PostgreSQL: не требуется."""
     return None

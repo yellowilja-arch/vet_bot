@@ -7,7 +7,7 @@ r = redis.from_url(REDIS_URL, decode_responses=True)
 
 
 async def add_to_queue(topic: str, user_id: int, anonymous_id: str):
-    """Добавляет клиента в очередь (SQLite + Redis)"""
+    """Добавляет клиента в очередь (PostgreSQL + Redis)"""
     if r.sismember(f"queue_set:{topic}", user_id):
         return await get_queue_position(topic, user_id) or r.llen(f"queue:{topic}")
 
@@ -39,7 +39,7 @@ async def add_to_queue(topic: str, user_id: int, anonymous_id: str):
 
 
 async def pop_from_queue(topic: str):
-    """Извлекает клиента из очереди (Redis + SQLite)"""
+    """Извлекает клиента из очереди (Redis + PostgreSQL)"""
     queue_key = f"queue:{topic}"
     item = r.lpop(queue_key)
     if not item:
@@ -140,7 +140,7 @@ async def remove_from_queue(topic: str, user_id: int):
 
 
 async def restore_queue_from_db():
-    """Восстанавливает очередь из SQLite при старте"""
+    """Восстанавливает очередь из PostgreSQL при старте"""
     db = await get_db()
     for topic in SPECIALISTS.keys():
         r.delete(f"queue:{topic}")
@@ -201,7 +201,7 @@ async def _admin_force_close_active_consultations() -> list[int]:
 
 async def clear_queue(topic: str) -> tuple[list[int], list[int], int]:
     """
-    Очищает очередь (Redis + SQLite).
+    Очищает очередь (Redis + PostgreSQL).
     Возвращает (client_id для статистики сброса; кому слать уведомление; число принудительно закрытых active).
 
     Для topic == \"all\":

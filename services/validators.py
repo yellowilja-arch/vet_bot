@@ -32,7 +32,7 @@ async def has_active_consultation(client_id):
 
 
 async def is_client_active(client_id):
-    """Проверяет, активен ли клиент (Redis + SQLite)"""
+    """Проверяет, активен ли клиент (Redis + PostgreSQL)"""
     if r.get(f"user:{client_id}:active"):
         return True
     db = await get_db()

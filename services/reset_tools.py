@@ -7,7 +7,7 @@ from services.validators import set_doctor_status, persist_doctor_presence_to_db
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
 async def reset_user_state(user_id: int):
-    """Сбрасывает состояние пользователя (очищает Redis и SQLite)"""
+    """Сбрасывает состояние пользователя (очищает Redis и данные в PostgreSQL)"""
     # Очищаем Redis
     r.delete(f"user:{user_id}:active")
     r.delete(f"user:{user_id}:consultation_id")
