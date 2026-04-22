@@ -1,4 +1,5 @@
 import logging
+import uuid
 import redis
 
 from aiogram import Router, F
@@ -13,7 +14,14 @@ from aiogram.types import (
 )
 from aiogram.fsm.context import FSMContext
 from html import escape
-from config import ADMIN_IDS, PHONE_NUMBER, DEFAULT_CONSULTATION_PRICE, REDIS_URL
+from config import (
+    ADMIN_IDS,
+    PHONE_NUMBER,
+    DEFAULT_CONSULTATION_PRICE,
+    REDIS_URL,
+    PUBLIC_WEBHOOK_BASE,
+    tbank_acquiring_configured,
+)
 from data.problems import (
     PROBLEMS,
     SPECIALISTS,
@@ -55,8 +63,11 @@ from database.consultations import (
     get_consultation_doctor_and_topic,
     set_consultation_offline_intake,
     finalize_questionnaire_sla,
+    cancel_tbank_checkout,
 )
-from database.payments import save_payment
+from database.payments import save_payment, save_tbank_pending_payment
+from database.settings import get_active_payment_method
+from services.tbank import tbank_init_payment
 from database.users import save_user_if_new, touch_user_last_seen
 from database.support import (
     add_support_message,
@@ -148,6 +159,115 @@ def _problem_or_spec_title(key: str) -> str:
     if key in SPECIALISTS:
         return SPECIALISTS[key]
     return key
+
+
+def _receipt_after_pay_inline_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid_confirm")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_payment")],
+        ]
+    )
+
+
+async def _post_consultation_assign_for_payment(consultation_id: int, data: dict, problem_key: str) -> None:
+    if data.get("offline_doctor_booking"):
+        await set_consultation_offline_intake(consultation_id)
+    direct_tid = data.get("direct_doctor_id")
+    if direct_tid:
+        await assign_pending_doctor_direct(consultation_id, int(direct_tid))
+    else:
+        await assign_pending_doctor_from_topic(consultation_id, problem_key)
+
+
+async def _client_start_tbank(
+    call: CallbackQuery, state: FSMContext, user_id: int, data: dict, problem_key: str
+) -> bool:
+    price = int(data.get("problem_price") or DEFAULT_CONSULTATION_PRICE)
+    prob_name = (data.get("problem_name") or "").strip() or _problem_or_spec_title(problem_key)
+    anonymous_id = get_anonymous_id(problem_key, user_id)
+    consultation_id = await save_consultation_start(user_id, anonymous_id, None, problem_key)
+    if not consultation_id:
+        await call.message.edit_text(
+            "❌ Не удалось оформить оплату: у вас уже есть открытая заявка. "
+            "Дождитесь завершения или напишите в «🆘 Помощь».",
+        )
+        await call.answer()
+        return False
+
+    notif = f"{PUBLIC_WEBHOOK_BASE.rstrip('/')}/tbank/notify"
+    if not tbank_acquiring_configured() or not str(notif).startswith("https://"):
+        await cancel_tbank_checkout(consultation_id, user_id)
+        await call.message.edit_text(
+            "❌ Онлайн-оплата сейчас недоступна. Проверьте настройки TBANK_*, PUBLIC_WEBHOOK_BASE (https, как в Railway).",
+        )
+        await call.answer()
+        return False
+
+    await _post_consultation_assign_for_payment(consultation_id, data, problem_key)
+    order_id = f"vet{consultation_id}_{uuid.uuid4().hex[:12]}"
+    try:
+        await save_tbank_pending_payment(user_id, consultation_id, price, order_id)
+    except Exception:
+        logging.exception("save_tbank_pending_payment")
+        await cancel_tbank_checkout(consultation_id, user_id)
+        await call.message.edit_text("❌ Ошибка записи платежа. Попробуйте позже.")
+        await call.answer()
+        return False
+
+    desc = f"Консультация {prob_name[:100]}"
+    init = await tbank_init_payment(
+        amount_kopecks=price * 100,
+        order_id=order_id,
+        description=desc,
+        notification_url=notif,
+    )
+    if not init.get("Success"):
+        await cancel_tbank_checkout(consultation_id, user_id)
+        msg = (init.get("Message") or init.get("Details") or "ошибка банка")[:300]
+        await call.message.edit_text(f"❌ Не удалось создать платёж: {escape(str(msg))}")
+        await call.answer()
+        return False
+
+    pay_url = init.get("PaymentURL") or init.get("PaymentUrl")
+    if not pay_url:
+        await cancel_tbank_checkout(consultation_id, user_id)
+        await call.message.edit_text("❌ Банк не вернул ссылку на оплату.")
+        await call.answer()
+        return False
+
+    await state.update_data(
+        problem_key=problem_key,
+        consultation_id=consultation_id,
+        anonymous_id=anonymous_id,
+        tbank_consultation_id=consultation_id,
+    )
+    await state.set_state(PaymentState.waiting_payment)
+    await call.message.edit_text(
+        "💳 <b>Онлайн-оплата (Т-Банк)</b>\n\n"
+        f"Сумма: <b>{price} ₽</b>\n\n"
+        "Перейдите по ссылке и завершите оплату. После этого вы автоматически перейдёте к анкете о питомце.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🔗 Перейти к оплате", url=pay_url)],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_payment")],
+            ]
+        ),
+        parse_mode="HTML",
+    )
+    await call.answer()
+    return True
+
+
+async def _client_show_receipt_flow(call: CallbackQuery, state: FSMContext, header_html: str) -> None:
+    await call.message.edit_text(
+        header_html
+        + f"\n\n📞 Оплата по номеру телефона (СБП):\n<code>{PHONE_NUMBER}</code>\n\n"
+        + "✅ После оплаты нажмите кнопку ниже и отправьте чек.",
+        reply_markup=_receipt_after_pay_inline_kb(),
+        parse_mode="HTML",
+    )
+    await call.answer()
 
 
 async def _send_problem_card(chat_id: int, state: FSMContext, problem_key: str) -> None:
@@ -356,7 +476,7 @@ async def start_command(message: Message, state: FSMContext):
         await safe_send_message(
             user_id,
             "🛠 <b>Панель администратора</b>\nКоманды: /stats, /health, /ban и др.",
-            reply_markup=get_admin_main_keyboard(),
+            reply_markup=get_admin_main_keyboard(user_id),
             parse_mode="HTML",
         )
         await _sync_cmds()
@@ -409,7 +529,7 @@ async def panel_mode_callback(call: CallbackQuery, state: FSMContext):
         await safe_send_message(
             user_id,
             "🛠 <b>Панель администратора</b>",
-            reply_markup=get_admin_main_keyboard(),
+            reply_markup=get_admin_main_keyboard(user_id),
             parse_mode="HTML",
         )
     else:
@@ -452,7 +572,7 @@ async def cmd_admin_panel(message: Message, state: FSMContext):
     await safe_send_message(
         uid,
         "🛠 <b>Панель администратора</b>",
-        reply_markup=get_admin_main_keyboard(),
+        reply_markup=get_admin_main_keyboard(uid),
         parse_mode="HTML",
     )
     await apply_commands_for_user(message.bot, uid)
@@ -625,13 +745,10 @@ async def pay_direct_doctor_offline(call: CallbackQuery, state: FSMContext):
             f"Врач: <b>{escape(dname)}</b> (сейчас не в сети)\n"
             f"📋 Тема: {escape(_problem_or_spec_title(pk))}\n"
             f"📅 Ответ в течение 24 часов после подтверждения оплаты.\n\n"
-            f"Сумма: {price} ₽\n\n"
-            f"📞 Оплата по номеру телефона (СБП):\n"
-            f"<code>{PHONE_NUMBER}</code>\n\n"
-            f"✅ После оплаты нажмите кнопку ниже и отправьте чек.",
+            f"💰 <b>Стоимость: {price} ₽</b>",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid_confirm")],
+                    [InlineKeyboardButton(text="💰 Оплатить", callback_data=f"pay_run_d:{tid}")],
                     [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_payment")],
                 ]
             ),
@@ -650,18 +767,16 @@ async def pay_direct_doctor_offline(call: CallbackQuery, state: FSMContext):
         offline_doctor_booking=True,
         problem_name=f"Консультация: {dname}",
     )
+    p = int(prob_data["price"])
     await call.message.edit_text(
         f"💰 <b>Оплата консультации</b>\n\n"
         f"Врач: <b>{escape(dname)}</b> (сейчас не в сети)\n"
         f"📅 Ответ в течение 24 часов после подтверждения оплаты.\n\n"
         f"Услуга: запись к выбранному специалисту\n"
-        f"Сумма: {prob_data['price']} ₽\n\n"
-        f"📞 Оплата по номеру телефона (СБП):\n"
-        f"<code>{PHONE_NUMBER}</code>\n\n"
-        f"✅ После оплаты нажмите кнопку ниже и отправьте чек.",
+        f"💰 <b>Стоимость: {p} ₽</b>",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid_confirm")],
+                [InlineKeyboardButton(text="💰 Оплатить", callback_data=f"pay_run_d:{tid}")],
                 [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_payment")],
             ]
         ),
@@ -704,13 +819,10 @@ async def pay_direct_doctor(call: CallbackQuery, state: FSMContext):
             f"💰 <b>Оплата консультации</b>\n\n"
             f"Врач: <b>{escape(dname)}</b>\n"
             f"📋 Тема: {escape(_problem_or_spec_title(pk))}\n"
-            f"Сумма: {price} ₽\n\n"
-            f"📞 Оплата по номеру телефона (СБП):\n"
-            f"<code>{PHONE_NUMBER}</code>\n\n"
-            f"✅ После оплаты нажмите кнопку ниже и отправьте чек.",
+            f"💰 <b>Стоимость: {price} ₽</b>",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid_confirm")],
+                    [InlineKeyboardButton(text="💰 Оплатить", callback_data=f"pay_run_d:{tid}")],
                     [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_payment")],
                 ]
             ),
@@ -728,17 +840,15 @@ async def pay_direct_doctor(call: CallbackQuery, state: FSMContext):
         direct_doctor_id=tid,
         problem_name=f"Консультация: {dname}",
     )
+    p = int(prob_data["price"])
     await call.message.edit_text(
         f"💰 <b>Оплата консультации</b>\n\n"
         f"Врач: <b>{escape(dname)}</b>\n"
         f"Услуга: запись к выбранному специалисту\n"
-        f"Сумма: {prob_data['price']} ₽\n\n"
-        f"📞 Оплата по номеру телефона (СБП):\n"
-        f"<code>{PHONE_NUMBER}</code>\n\n"
-        f"✅ После оплаты нажмите кнопку ниже и отправьте чек.",
+        f"💰 <b>Стоимость: {p} ₽</b>",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid_confirm")],
+                [InlineKeyboardButton(text="💰 Оплатить", callback_data=f"pay_run_d:{tid}")],
                 [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_payment")],
             ]
         ),
@@ -902,20 +1012,102 @@ async def pay_topic(call: CallbackQuery, state: FSMContext):
         problem_name=prob_name,
         problem_price=price,
     )
-    pay_rows = [[InlineKeyboardButton(text="✅ Я оплатил", callback_data="paid_confirm")]]
+    pay_rows = [
+        [InlineKeyboardButton(text="💰 Оплатить", callback_data=f"pay_run_t:{spec_key}")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_topics")],
+    ]
 
     disp = prob_name if spec_key == UNIVERSAL_TOPIC_KEY else title
     await call.message.edit_text(
-        f"💰 <b>Оплата консультации</b>\n\n"
-        f"Тема: {escape(disp)}\n"
-        f"Сумма: {price} ₽\n\n"
-        f"📞 Оплата по номеру телефона (СБП):\n"
-        f"<code>{PHONE_NUMBER}</code>\n\n"
-        f"✅ После оплаты нажмите кнопку ниже и отправьте чек.",
+        f"{escape(disp)}\n\n"
+        f"💰 <b>Стоимость: {price} ₽</b>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=pay_rows),
         parse_mode="HTML",
     )
     await call.answer()
+
+
+@router.callback_query(
+    lambda c: c.data
+    and (c.data.startswith("pay_run_t:") or c.data.startswith("pay_run_d:"))
+)
+async def pay_run_execute(call: CallbackQuery, state: FSMContext):
+    user_id = call.from_user.id
+    if not await user_in_client_context(user_id):
+        await call.answer("⛔", show_alert=True)
+        return
+
+    data = await state.get_data()
+    method = await get_active_payment_method()
+
+    if call.data.startswith("pay_run_t:"):
+        spec_key = call.data.split(":", 1)[1]
+        st_pk = data.get("problem_key")
+        if st_pk != spec_key or (
+            spec_key not in PROBLEMS and spec_key not in SPECIALISTS
+        ):
+            await call.answer("Сначала выберите тему заново (меню /start).", show_alert=True)
+            return
+        problem_key = str(spec_key)
+        if method == "tbank":
+            await _client_start_tbank(call, state, user_id, data, problem_key)
+            return
+        header = (
+            f"💰 <b>Оплата консультации</b>\n\n"
+            f"Тема: {escape(_problem_or_spec_title(problem_key))}\n"
+            f"💰 <b>Стоимость: {int(data.get('problem_price') or DEFAULT_CONSULTATION_PRICE)} ₽</b>"
+        )
+        await _client_show_receipt_flow(call, state, header)
+        return
+
+    # pay_run_d:
+    try:
+        tid = int(call.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await call.answer("Ошибка", show_alert=True)
+        return
+    if int(data.get("direct_doctor_id") or 0) != tid:
+        await call.answer("Сессия устарела. Откройте «Наши врачи» снова.", show_alert=True)
+        return
+    problem_key = str(data.get("problem_key") or "direct_booking")
+    dname = await get_doctor_name(tid)
+    price = int(data.get("problem_price") or DEFAULT_CONSULTATION_PRICE)
+    if data.get("offline_doctor_booking"):
+        if problem_key == "direct_booking":
+            header = (
+                f"💰 <b>Оплата консультации</b>\n\n"
+                f"Врач: <b>{escape(dname)}</b> (сейчас не в сети)\n"
+                f"📅 Ответ в течение 24 часов после подтверждения оплаты.\n\n"
+                f"Услуга: запись к выбранному специалисту\n"
+                f"💰 <b>Стоимость: {price} ₽</b>"
+            )
+        else:
+            header = (
+                f"💰 <b>Оплата консультации</b>\n\n"
+                f"Врач: <b>{escape(dname)}</b> (сейчас не в сети)\n"
+                f"📋 Тема: {escape(_problem_or_spec_title(problem_key))}\n"
+                f"📅 Ответ в течение 24 часов после подтверждения оплаты.\n\n"
+                f"💰 <b>Стоимость: {price} ₽</b>"
+            )
+    else:
+        if problem_key == "direct_booking":
+            header = (
+                f"💰 <b>Оплата консультации</b>\n\n"
+                f"Врач: <b>{escape(dname)}</b>\n"
+                f"Услуга: запись к выбранному специалисту\n"
+                f"💰 <b>Стоимость: {price} ₽</b>"
+            )
+        else:
+            header = (
+                f"💰 <b>Оплата консультации</b>\n\n"
+                f"Врач: <b>{escape(dname)}</b>\n"
+                f"📋 Тема: {escape(_problem_or_spec_title(problem_key))}\n"
+                f"💰 <b>Стоимость: {price} ₽</b>"
+            )
+    if method == "tbank":
+        await _client_start_tbank(call, state, user_id, data, problem_key)
+        return
+    await _client_show_receipt_flow(call, state, header)
 
 
 @router.callback_query(lambda c: c.data == "paid_confirm")
@@ -959,7 +1151,8 @@ async def handle_receipt(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        await save_payment(user_id, consultation_id, message.photo[-1].file_id)
+        prub = int(data.get("problem_price") or DEFAULT_CONSULTATION_PRICE)
+        await save_payment(user_id, consultation_id, message.photo[-1].file_id, prub)
 
         direct_tid = data.get("direct_doctor_id")
         notified = False
@@ -1072,6 +1265,13 @@ async def handle_receipt(message: Message, state: FSMContext):
 
 @router.callback_query(lambda c: c.data == "cancel_payment")
 async def cancel_payment(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    tcid = data.get("tbank_consultation_id")
+    if tcid:
+        try:
+            await cancel_tbank_checkout(int(tcid), call.from_user.id)
+        except Exception:
+            logging.exception("cancel_tbank_checkout on cancel_payment")
     await state.clear()
     await call.message.edit_text("❌ Оплата отменена. Напишите /start для начала.")
     await call.answer()

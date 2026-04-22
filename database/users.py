@@ -1,4 +1,7 @@
 import logging
+
+import asyncpg
+
 from database.db import get_db
 
 async def save_user_if_new(user_id: int, username: str = None, first_name: str = None, last_name: str = None):
@@ -16,10 +19,11 @@ async def save_user_if_new(user_id: int, username: str = None, first_name: str =
             ''', (user_id, username, first_name, last_name, full_name))
             await db.commit()
             print(f"📝 Новый пользователь сохранён: {user_id} (@{username})")
+        except asyncpg.UniqueViolationError:
+            logging.info("Пользователь уже есть в БД: %s", user_id)
         except Exception as e:
-            # Игнорируем ситуацию гонки, если пользователь уже добавлен
             if "UNIQUE constraint failed" in str(e) or "duplicate key" in str(e).lower():
-                logging.info(f"Пользователь уже есть в БД: {user_id}")
+                logging.info("Пользователь уже есть в БД: %s", user_id)
             else:
                 raise
 

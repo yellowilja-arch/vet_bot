@@ -78,7 +78,7 @@ def get_topic_pay_keyboard(spec_key: str) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                text="💰 Оплатить консультацию",
+                text="💰 Оплатить",
                 callback_data=f"pay_topic:{spec_key}",
             )
         ],
@@ -103,7 +103,7 @@ def get_problem_info_keyboard(problem_key: str):
 
                 InlineKeyboardButton(
 
-                    text="💰 Оплатить консультацию",
+                    text="💰 Оплатить",
 
                     callback_data=f"pay_topic:{problem_key}",
 
@@ -365,7 +365,7 @@ def get_doctor_free_pay_keyboard(doctor_id: int) -> InlineKeyboardMarkup:
 
                 InlineKeyboardButton(
 
-                    text="💰 Оплатить консультацию",
+                    text="💰 Оплатить",
 
                     callback_data=f"pay_direct:{doctor_id}",
 

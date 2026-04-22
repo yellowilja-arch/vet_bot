@@ -8,12 +8,13 @@ import redis.asyncio as redis_async
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.types import ErrorEvent
 import os
-from config import BOT_TOKEN, ADMIN_IDS, REDIS_URL
+from config import BOT_TOKEN, ADMIN_IDS, REDIS_URL, PORT
 from handlers import register_handlers
 from services.bot_commands import default_scope_commands
 from workers.backups import backup_worker
 from workers.inactivity import inactivity_worker
 from workers.doctor_reminders import doctor_reminder_worker
+from services.support_escalation import support_escalation_worker
 from utils.helpers import safe_send_message
 from database.db import get_db
 import logging
@@ -103,6 +104,7 @@ async def main():
     asyncio.create_task(backup_worker())
     asyncio.create_task(inactivity_worker())
     asyncio.create_task(doctor_reminder_worker())
+    asyncio.create_task(support_escalation_worker())
     
     # Graceful shutdown
     def signal_handler(signum, frame):
@@ -112,11 +114,24 @@ async def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
+    http_runner = None
+    try:
+        from services.tbank_server import start_http_site
+
+        http_runner = await start_http_site(bot, dp, host="0.0.0.0", port=PORT)
+    except Exception as e:
+        logging.warning("HTTP (health, /tbank/notify) не поднят: %s", e)
+
     try:
         await dp.start_polling(bot)
     except Exception as e:
         logging.error(f"Ошибка в polling: {e}")
     finally:
+        if http_runner is not None:
+            try:
+                await http_runner.cleanup()
+            except Exception as e:
+                logging.warning("HTTP runner cleanup: %s", e)
         await shutdown()
 
 async def shutdown():

@@ -1,14 +1,14 @@
-from database.db import get_db, _db_lock
+from database.db import get_db, _db_lock, sql_qmarks, write_transaction
 
 
-async def save_payment(client_id: int, consultation_id: int, receipt_file_id: str):
+async def save_payment(client_id: int, consultation_id: int, receipt_file_id: str, amount: int):
     """Сохраняет платёж в статусе pending"""
     db = await get_db()
     async with _db_lock:
         await db.execute('''
             INSERT INTO payments (client_id, consultation_id, amount, status, receipt_file_id)
-            VALUES (?, ?, 500, 'pending', ?)
-        ''', (client_id, consultation_id, receipt_file_id))
+            VALUES (?, ?, ?, 'pending', ?)
+        ''', (client_id, consultation_id, int(amount), receipt_file_id))
         await db.commit()
 
 
@@ -21,6 +21,10 @@ async def save_tbank_pending_payment(
     """Ожидание оплаты через Т-Банк (без фото чека)."""
     db = await get_db()
     async with _db_lock:
+        await db.execute(
+            "DELETE FROM payments WHERE consultation_id = ? AND status = 'pending'",
+            (consultation_id,),
+        )
         await db.execute(
             """
             INSERT INTO payments (client_id, consultation_id, amount, status, receipt_file_id, tbank_order_id)
@@ -62,49 +66,60 @@ async def set_tbank_payment_id_for_order(tbank_order_id: str, tbank_payment_id: 
 
 async def confirm_payment(client_id: int, consultation_id: int):
     """Подтверждает текущий ожидающий платёж (в т.ч. при повторных консультациях клиента)."""
-    db = await get_db()
     async with _db_lock:
-        if consultation_id:
-            cursor = await db.execute(
-                """
-                SELECT id FROM payments
-                WHERE client_id = ? AND consultation_id = ? AND status = 'pending'
-                """,
-                (client_id, consultation_id),
-            )
-        else:
-            cursor = await db.execute(
-                """
-                SELECT id FROM payments
-                WHERE client_id = ? AND status = 'pending'
-                ORDER BY id DESC LIMIT 1
-                """,
-                (client_id,),
-            )
-        row = await cursor.fetchone()
-        if not row:
-            return False
-        pay_id = row[0]
+        async with write_transaction() as conn:
+            if consultation_id:
+                row = await conn.fetchrow(
+                    sql_qmarks(
+                        """
+                        SELECT id FROM payments
+                        WHERE client_id = ? AND consultation_id = ? AND status = 'pending'
+                        FOR UPDATE
+                        """
+                    ),
+                    client_id,
+                    consultation_id,
+                )
+            else:
+                row = await conn.fetchrow(
+                    sql_qmarks(
+                        """
+                        SELECT id FROM payments
+                        WHERE client_id = ? AND status = 'pending'
+                        ORDER BY id DESC
+                        LIMIT 1
+                        FOR UPDATE
+                        """
+                    ),
+                    client_id,
+                )
+            if not row:
+                return False
+            pay_id = int(row[0])
 
-        await db.execute(
-            """
-            UPDATE payments
-            SET status = 'confirmed', confirmed_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (pay_id,),
-        )
-        await db.commit()
-
-        if consultation_id:
-            await db.execute(
-                """
-                UPDATE consultations SET status = 'paid', payment_confirmed = TRUE
-                WHERE id = ? AND client_id = ?
-                """,
-                (consultation_id, client_id),
+            await conn.execute(
+                sql_qmarks(
+                    """
+                    UPDATE payments
+                    SET status = 'confirmed', confirmed_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """
+                ),
+                pay_id,
             )
-            await db.commit()
+
+            if consultation_id:
+                await conn.execute(
+                    sql_qmarks(
+                        """
+                        UPDATE consultations
+                        SET status = 'paid', payment_confirmed = TRUE
+                        WHERE id = ? AND client_id = ?
+                        """
+                    ),
+                    consultation_id,
+                    client_id,
+                )
 
         return True
 

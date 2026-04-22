@@ -80,6 +80,24 @@ async def save_consultation_start(client_id: int, anonymous_id: str, doctor_id: 
         return cursor.lastrowid
 
 
+async def cancel_tbank_checkout(consultation_id: int, client_id: int) -> None:
+    """Отмена неуспешного создания платежа Т-Банка: pending-платёж и консультация waiting_payment."""
+    db = await get_db()
+    async with _db_lock:
+        await db.execute(
+            "DELETE FROM payments WHERE consultation_id = ? AND status = 'pending'",
+            (consultation_id,),
+        )
+        await db.execute(
+            """
+            UPDATE consultations SET status = 'cancelled'
+            WHERE id = ? AND client_id = ? AND status = 'waiting_payment'
+            """,
+            (consultation_id, client_id),
+        )
+        await db.commit()
+
+
 async def save_consultation_end(consultation_id: int, status: str, client_msgs: int = 0, doctor_msgs: int = 0):
     """Сохраняет завершение консультации"""
     db = await get_db()

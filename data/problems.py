@@ -68,7 +68,7 @@ PROBLEMS = {
         "name": "🦴 Консультация по рентгену",
         "category": "trauma",
         "description": "Расшифровка рентгеновских снимков, консультация травматолога",
-        "price": 500,
+        "price": 1300,
         "specialists": ["orthopedist", "radiologist"],
         "urgent": False
     },
@@ -76,7 +76,7 @@ PROBLEMS = {
         "name": "🩸 Травма",
         "category": "trauma",
         "description": "Ушибы, растяжения, подозрение на перелом",
-        "price": 500,
+        "price": 1300,
         "specialists": ["orthopedist", "surgeon"],
         "urgent": False
     },
@@ -84,7 +84,7 @@ PROBLEMS = {
         "name": "🔪 Колотые и резаные раны",
         "category": "trauma",
         "description": "Обработка ран, оценка глубины повреждения",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "surgeon"],
         "urgent": True
     },
@@ -92,7 +92,7 @@ PROBLEMS = {
         "name": "🏥 Послеоперационный уход",
         "category": "trauma",
         "description": "Уход после операции, обработка швов, рекомендации",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "surgeon"],
         "urgent": False
     },
@@ -100,7 +100,7 @@ PROBLEMS = {
         "name": "🔬 Консультация по анализам",
         "category": "internal",
         "description": "Расшифровка результатов анализов крови, мочи, биохимии",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -108,7 +108,7 @@ PROBLEMS = {
         "name": "🧠 Консультация по МРТ/КТ",
         "category": "internal",
         "description": "Расшифровка снимков МРТ и КТ",
-        "price": 500,
+        "price": 1300,
         "specialists": ["orthopedist", "neurologist", "oncologist", "surgeon"],
         "urgent": False
     },
@@ -116,7 +116,7 @@ PROBLEMS = {
         "name": "🍽️ Отказ от еды",
         "category": "common_symptoms",
         "description": "Питомец отказывается от корма",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -124,7 +124,7 @@ PROBLEMS = {
         "name": "💩 Диарея",
         "category": "common_symptoms",
         "description": "Расстройство стула, жидкий кал",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "gastroenterologist"],
         "urgent": False
     },
@@ -132,7 +132,7 @@ PROBLEMS = {
         "name": "🤢 Рвота",
         "category": "common_symptoms",
         "description": "Рвота, срыгивание",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "gastroenterologist"],
         "urgent": False
     },
@@ -140,7 +140,7 @@ PROBLEMS = {
         "name": "🚶 Хромота",
         "category": "trauma",
         "description": "Питомец хромает, не наступает на лапу",
-        "price": 500,
+        "price": 1300,
         "specialists": ["orthopedist"],
         "urgent": False
     },
@@ -148,7 +148,7 @@ PROBLEMS = {
         "name": "🦵 Дисфункция конечностей",
         "category": "trauma",
         "description": "Слабость в конечностях, отказ от опоры",
-        "price": 500,
+        "price": 1300,
         "specialists": ["orthopedist", "neurologist"],
         "urgent": True
     },
@@ -156,7 +156,7 @@ PROBLEMS = {
         "name": "🚽 Нарушение мочеиспускания",
         "category": "internal",
         "description": "Затруднённое или частое мочеиспускание",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "nephrologist"],
         "urgent": False
     },
@@ -164,7 +164,7 @@ PROBLEMS = {
         "name": "🏥 Диспансеризация",
         "category": "internal",
         "description": "Профилактический осмотр, оценка здоровья",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -172,7 +172,7 @@ PROBLEMS = {
         "name": "🎈 Опухоли и шишки",
         "category": "internal",
         "description": "Новообразования на коже и под кожей",
-        "price": 500,
+        "price": 1300,
         "specialists": ["surgeon", "oncologist"],
         "urgent": False
     },
@@ -180,7 +180,7 @@ PROBLEMS = {
         "name": "💊 Дегельминтизация и вакцинация",
         "category": "dentistry",
         "description": "График прививок и обработок от паразитов",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -188,7 +188,7 @@ PROBLEMS = {
         "name": "🚽 Запор",
         "category": "common_symptoms",
         "description": "Отсутствие стула, затруднённая дефекация",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "gastroenterologist"],
         "urgent": False
     },
@@ -196,7 +196,7 @@ PROBLEMS = {
         "name": "🩸 Кровь в моче",
         "category": "internal",
         "description": "Гематурия, изменение цвета мочи",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "nephrologist"],
         "urgent": True
     },
@@ -204,7 +204,7 @@ PROBLEMS = {
         "name": "🩸 Кровь в кале",
         "category": "internal",
         "description": "Кровь в стуле, чёрный кал",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "gastroenterologist"],
         "urgent": True
     },
@@ -212,7 +212,7 @@ PROBLEMS = {
         "name": "🫁 Кашель",
         "category": "common_symptoms",
         "description": "Сухой или влажный кашель",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -220,7 +220,7 @@ PROBLEMS = {
         "name": "🤧 Чиханье",
         "category": "common_symptoms",
         "description": "Частое чихание, выделения из носа",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -228,7 +228,7 @@ PROBLEMS = {
         "name": "👃 Выделения из носа",
         "category": "common_symptoms",
         "description": "Прозрачные или гнойные выделения",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -236,7 +236,7 @@ PROBLEMS = {
         "name": "👁️ Выделения из глаз",
         "category": "common_symptoms",
         "description": "Слезотечение, гнойные выделения",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -244,7 +244,7 @@ PROBLEMS = {
         "name": "🐕 Зуд / покраснения на коже",
         "category": "common_symptoms",
         "description": "Зуд, высыпания, покраснения",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "dermatologist"],
         "urgent": False
     },
@@ -252,7 +252,7 @@ PROBLEMS = {
         "name": "😴 Апатия",
         "category": "common_symptoms",
         "description": "Вялость, слабость, сонливость",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -260,7 +260,7 @@ PROBLEMS = {
         "name": "✂️ Кастрация / стерилизация",
         "category": "reproduction",
         "description": "Подготовка и рекомендации по стерилизации",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "surgeon"],
         "urgent": False
     },
@@ -268,7 +268,7 @@ PROBLEMS = {
         "name": "🦷 Уход за зубами",
         "category": "dentistry",
         "description": "Чистка зубов, лечение дёсен",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "surgeon"],
         "urgent": False
     },
@@ -276,7 +276,7 @@ PROBLEMS = {
         "name": "🍲 Перевести на другой корм",
         "category": "internal",
         "description": "Смена рациона, подбор корма",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -284,7 +284,7 @@ PROBLEMS = {
         "name": "🧠 Неврологические отклонения",
         "category": "internal",
         "description": "Шаткая походка, круговые движения, неестественное положение головы",
-        "price": 500,
+        "price": 1300,
         "specialists": ["surgeon", "neurologist"],
         "urgent": True
     },
@@ -292,7 +292,7 @@ PROBLEMS = {
         "name": "🎯 Получить второе мнение",
         "category": "specialist",
         "description": "Консультация узкого специалиста",
-        "price": 500,
+        "price": 1300,
         "specialists": [
             "surgeon",
             "orthopedist",
@@ -312,7 +312,7 @@ PROBLEMS = {
         "name": "🔬 Какие анализы нужно сдать",
         "category": "internal",
         "description": "Рекомендации по диагностике",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -320,7 +320,7 @@ PROBLEMS = {
         "name": "🦠 Лейкоз (FeLV)",
         "category": "infectious",
         "description": "Вирусная лейкемия кошек (FeLV)",
-        "price": 500,
+        "price": 1300,
         "specialists": ["virologist"],
         "urgent": False
     },
@@ -328,7 +328,7 @@ PROBLEMS = {
         "name": "🦠 Иммунодефицит (FIV)",
         "category": "infectious",
         "description": "Вирусный иммунодефицит кошек (FIV)",
-        "price": 500,
+        "price": 1300,
         "specialists": ["virologist"],
         "urgent": False
     },
@@ -336,7 +336,7 @@ PROBLEMS = {
         "name": "🦠 ФИП (перитонит кошек)",
         "category": "infectious",
         "description": "Коронавирусный перитонит кошек",
-        "price": 500,
+        "price": 1300,
         "specialists": ["virologist"],
         "urgent": False
     },
@@ -344,7 +344,7 @@ PROBLEMS = {
         "name": "🦠 Панлейкопения",
         "category": "infectious",
         "description": "Парвовирусная инфекция кошек (панлейкопения)",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "virologist"],
         "urgent": True
     },
@@ -352,7 +352,7 @@ PROBLEMS = {
         "name": "🦠 Респираторные вирусные",
         "category": "infectious",
         "description": "Ринотрахеит, калицивироз",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "virologist"],
         "urgent": False
     },
@@ -360,7 +360,7 @@ PROBLEMS = {
         "name": "🦠 Бактериальные респираторные",
         "category": "infectious",
         "description": "Хламидиоз, токсоплазмоз, микоплазмоз",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "virologist"],
         "urgent": False
     },
@@ -368,7 +368,7 @@ PROBLEMS = {
         "name": "🩸 Болезни кроветворения",
         "category": "infectious",
         "description": "Гемоплазмоз, анаплазмоз, пироплазмоз",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "virologist"],
         "urgent": True
     },
@@ -376,7 +376,7 @@ PROBLEMS = {
         "name": "🎯 Консультация у специалиста",
         "category": "specialist",
         "description": "Приём узкого специалиста — маршрут по всем направлениям клиники",
-        "price": 500,
+        "price": 1300,
         "specialists": list(SPECIALIZATION_KEYS),
         "urgent": False
     },
@@ -384,7 +384,7 @@ PROBLEMS = {
         "name": "🥗 Правильное питание",
         "category": "internal",
         "description": "Рекомендации по питанию без составления рациона",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -392,7 +392,7 @@ PROBLEMS = {
         "name": "📋 Составление рациона",
         "category": "internal",
         "description": "Индивидуальный план питания",
-        "price": 500,
+        "price": 1300,
         "specialists": ["gastroenterologist"],
         "urgent": False
     },
@@ -400,7 +400,7 @@ PROBLEMS = {
         "name": "🔪 Подготовка к операции",
         "category": "internal",
         "description": "Рекомендации перед операцией",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "surgeon"],
         "urgent": False
     },
@@ -408,7 +408,7 @@ PROBLEMS = {
         "name": "👁️ Травмы глаз",
         "category": "internal",
         "description": "Выпадение третьего века, покраснение, помутнение роговицы",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": True
     },
@@ -416,7 +416,7 @@ PROBLEMS = {
         "name": "⚡ Судороги / эпилепсия",
         "category": "internal",
         "description": "Эпилептические припадки, судороги",
-        "price": 500,
+        "price": 1300,
         "specialists": ["neurologist"],
         "urgent": True
     },
@@ -424,7 +424,7 @@ PROBLEMS = {
         "name": "☠️ Отравление",
         "category": "internal",
         "description": "Отравление ядами, лекарствами, растениями",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": True
     },
@@ -432,7 +432,7 @@ PROBLEMS = {
         "name": "🤧 Аллергические реакции",
         "category": "common_symptoms",
         "description": "Отёк морды, крапивница, анафилаксия",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": True
     },
@@ -440,7 +440,7 @@ PROBLEMS = {
         "name": "🦴 Инородное тело",
         "category": "emergency",
         "description": "Подозрение на инородное тело в ЖКТ или дыхательных путях",
-        "price": 500,
+        "price": 1300,
         "specialists": ["surgeon"],
         "urgent": True
     },
@@ -448,7 +448,7 @@ PROBLEMS = {
         "name": "🌬️ Одышка / затруднённое дыхание",
         "category": "internal",
         "description": "Затруднённое дыхание без кашля и чихания",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "cardiologist"],
         "urgent": True
     },
@@ -456,7 +456,7 @@ PROBLEMS = {
         "name": "💧 Полидипсия / полиурия",
         "category": "internal",
         "description": "Повышенная жажда и мочеотделение",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "nephrologist"],
         "urgent": False
     },
@@ -464,7 +464,7 @@ PROBLEMS = {
         "name": "🐾 Проблемы с шерстью",
         "category": "common_symptoms",
         "description": "Колтуны, алопеция, тусклость, жирность",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "dermatologist"],
         "urgent": False
     },
@@ -472,7 +472,7 @@ PROBLEMS = {
         "name": "😾 Поведенческие проблемы",
         "category": "common_symptoms",
         "description": "Агрессия, страхи, навязчивые движения",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -480,7 +480,7 @@ PROBLEMS = {
         "name": "🐕 Укусы",
         "category": "trauma",
         "description": "Укусы других животных, насекомых, змей",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "surgeon"],
         "urgent": True
     },
@@ -488,7 +488,7 @@ PROBLEMS = {
         "name": "🔥 Ожоги",
         "category": "trauma",
         "description": "Термические, химические, солнечные ожоги",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "surgeon"],
         "urgent": True
     },
@@ -496,7 +496,7 @@ PROBLEMS = {
         "name": "😵 Обморок / коллапс",
         "category": "internal",
         "description": "Внезапная слабость, падение",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": True
     },
@@ -504,7 +504,7 @@ PROBLEMS = {
         "name": "🦴 Артрит / остеоартроз",
         "category": "trauma",
         "description": "Трудности вставания, боль при движении",
-        "price": 500,
+        "price": 1300,
         "specialists": ["orthopedist"],
         "urgent": False
     },
@@ -512,7 +512,7 @@ PROBLEMS = {
         "name": "🤱 Мастит",
         "category": "internal",
         "description": "Воспаление молочных желёз",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -520,7 +520,7 @@ PROBLEMS = {
         "name": "🤰 Затруднённые роды",
         "category": "reproduction",
         "description": "Осложнения беременности и родов",
-        "price": 500,
+        "price": 1300,
         "specialists": ["reproductologist"],
         "urgent": True
     },
@@ -528,7 +528,7 @@ PROBLEMS = {
         "name": "🍼 Уход за новорождёнными",
         "category": "reproduction",
         "description": "Слабый приплод, гипотермия, отказ от молока",
-        "price": 500,
+        "price": 1300,
         "specialists": ["reproductologist"],
         "urgent": True
     },
@@ -536,7 +536,7 @@ PROBLEMS = {
         "name": "🔖 Чипирование",
         "category": "dentistry",
         "description": "Установка микрочипа, регистрация",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -544,7 +544,7 @@ PROBLEMS = {
         "name": "✂️ Стрижка когтей и чистка желёз",
         "category": "dentistry",
         "description": "Гигиенические процедуры, чистка анальных желёз",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -552,7 +552,7 @@ PROBLEMS = {
         "name": "🚨 Экстренная помощь",
         "category": "emergency",
         "description": "Срочная ситуация: после оплаты вы получите гайд первой помощи и адрес ближайшей клиники. При угрозе жизни звоните в клинику или везите питомца сразу.",
-        "price": 500,
+        "price": 1300,
         "specialists": [],
         "urgent": True
     },
@@ -560,7 +560,7 @@ PROBLEMS = {
         "name": "❤️ Кардиологическое обследование",
         "category": "internal",
         "description": "ЭхоКГ, ЭКГ, давление",
-        "price": 500,
+        "price": 1300,
         "specialists": ["cardiologist"],
         "urgent": False
     },
@@ -568,7 +568,7 @@ PROBLEMS = {
         "name": "🦠 Эндокринные заболевания",
         "category": "internal",
         "description": "Сахарный диабет, гипотиреоз, гиперкортицизм",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -576,7 +576,7 @@ PROBLEMS = {
         "name": "🦷 Стоматология",
         "category": "dentistry",
         "description": "Профессиональная чистка под седацией, удаление, шлифовка",
-        "price": 500,
+        "price": 1300,
         "specialists": ["surgeon"],
         "urgent": False
     },
@@ -584,7 +584,7 @@ PROBLEMS = {
         "name": "💊 Подбор антибиотиков",
         "category": "internal",
         "description": "По чувствительности, с учётом резистентности",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist"],
         "urgent": False
     },
@@ -592,7 +592,7 @@ PROBLEMS = {
         "name": "🩺 Оценка боли",
         "category": "internal",
         "description": "Хроническая, острая, нейропатическая боль",
-        "price": 500,
+        "price": 1300,
         "specialists": ["therapist", "neurologist", "orthopedist", "oncologist"],
         "urgent": False
     },
@@ -600,7 +600,7 @@ PROBLEMS = {
         "name": "📋 Консультация с выбранным врачом",
         "category": "specialist",
         "description": "Запись к конкретному специалисту (раздел «Наши врачи»)",
-        "price": 500,
+        "price": 1300,
         "specialists": [],
         "urgent": False,
     },
@@ -608,7 +608,7 @@ PROBLEMS = {
         "name": "❓ Не знаю, куда обратиться",
         "category": "specialist",
         "description": "Общая консультация, подбор направления",
-        "price": 500,
+        "price": 1300,
         "specialists": [],
         "urgent": False,
     },

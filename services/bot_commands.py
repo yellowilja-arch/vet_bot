@@ -41,6 +41,7 @@ ADMIN_COMMANDS = [
     BotCommand(command="resetall", description="Сбросить все состояния"),
     BotCommand(command="adddoctor", description="Добавить врача"),
     BotCommand(command="removedoctor", description="Удалить врача"),
+    BotCommand(command="set_payment_method", description="Способ оплаты (Т-Банк / чек)"),
     BotCommand(command="doctor", description="Панель врача"),
     BotCommand(command="client", description="Режим клиента"),
 ]

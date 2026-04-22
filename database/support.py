@@ -1,7 +1,7 @@
 """Обращения в поддержку: тикеты и переписка."""
 from __future__ import annotations
 
-from database.db import get_db
+from database.db import get_db, sql_qmarks, write_transaction
 
 
 async def backfill_messages_from_legacy() -> None:
@@ -15,37 +15,51 @@ async def backfill_messages_from_legacy() -> None:
         """
     )
     rows = await cur.fetchall()
-    for rid, uid, msg in rows:
-        await db.execute(
-            """
-            INSERT INTO support_messages (request_id, sender_role, sender_id, body)
-            VALUES (?, 'client', ?, ?)
-            """,
-            (rid, uid, msg or ""),
-        )
-    if rows:
-        await db.commit()
+    if not rows:
+        return
+    async with write_transaction() as conn:
+        for rid, uid, msg in rows:
+            await conn.execute(
+                sql_qmarks(
+                    """
+                    INSERT INTO support_messages (request_id, sender_role, sender_id, body)
+                    VALUES (?, 'client', ?, ?)
+                    """
+                ),
+                rid,
+                uid,
+                msg or "",
+            )
 
 
 async def create_support_ticket(user_id: int, username: str | None, text: str) -> int:
-    db = await get_db()
-    cur = await db.execute(
-        """
-        INSERT INTO support_requests (user_id, username, message, status)
-        VALUES (?, ?, ?, 'open')
-        """,
-        (user_id, username or "", text),
-    )
-    await db.commit()
-    request_id = cur.lastrowid
-    await db.execute(
-        """
-        INSERT INTO support_messages (request_id, sender_role, sender_id, body)
-        VALUES (?, 'client', ?, ?)
-        """,
-        (request_id, user_id, text),
-    )
-    await db.commit()
+    async with write_transaction() as conn:
+        row = await conn.fetchrow(
+            sql_qmarks(
+                """
+                INSERT INTO support_requests (user_id, username, message, status)
+                VALUES (?, ?, ?, 'open')
+                RETURNING id
+                """
+            ),
+            user_id,
+            username or "",
+            text,
+        )
+        if not row:
+            raise RuntimeError("support_requests: INSERT не вернул id")
+        request_id = int(row[0])
+        await conn.execute(
+            sql_qmarks(
+                """
+                INSERT INTO support_messages (request_id, sender_role, sender_id, body)
+                VALUES (?, 'client', ?, ?)
+                """
+            ),
+            request_id,
+            user_id,
+            text,
+        )
     return request_id
 
 
@@ -59,6 +73,13 @@ async def add_support_message(request_id: int, sender_role: str, sender_id: int,
         (request_id, sender_role, sender_id, body),
     )
     await db.commit()
+    if sender_role == "admin":
+        try:
+            from services.support_escalation import cancel_support_escalation
+
+            cancel_support_escalation(request_id)
+        except Exception:
+            pass
 
 
 async def get_open_request(request_id: int) -> tuple | None:
@@ -86,7 +107,15 @@ async def close_support_request(request_id: int) -> bool:
         (request_id,),
     )
     await db.commit()
-    return cur.rowcount > 0
+    ok = cur.rowcount > 0
+    if ok:
+        try:
+            from services.support_escalation import clear_support_ticket_escalation_meta
+
+            clear_support_ticket_escalation_meta(request_id)
+        except Exception:
+            pass
+    return ok
 
 
 async def list_open_requests() -> list[tuple[int, int, str | None, str, str]]:

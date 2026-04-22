@@ -8,6 +8,8 @@ import asyncio
 import logging
 import os
 import re
+from contextlib import asynccontextmanager
+
 import asyncpg
 
 _pool: asyncpg.Pool | None = None
@@ -36,6 +38,29 @@ def _qmarks_to_numbered(sql: str) -> str:
         return f"${n}"
 
     return re.sub(r"\?", repl, sql)
+
+
+# Для сырого asyncpg (транзакции) — тот же перевод ? → $1, $2, …
+sql_qmarks = _qmarks_to_numbered
+
+
+def _with_clause_data_modifying(stripped: str) -> bool:
+    """WITH … INSERT/UPDATE/DELETE нельзя отправлять в fetch() (ветка SELECT)."""
+    return bool(
+        re.search(r"\)\s*INSERT\s+INTO\b", stripped, re.I | re.DOTALL)
+        or re.search(r"\)\s*UPDATE\b", stripped, re.I | re.DOTALL)
+        or re.search(r"\)\s*DELETE\s+FROM\b", stripped, re.I | re.DOTALL)
+    )
+
+
+@asynccontextmanager
+async def write_transaction():
+    """Одно соединение + транзакция asyncpg (атомарные несколько запросов)."""
+    if _pool is None:
+        raise RuntimeError("Пул PostgreSQL не создан — сначала await init_db()")
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            yield conn
 
 
 def _parse_cmd_rowcount(status: str) -> int:
@@ -92,12 +117,17 @@ class _PgConnectionFacade:
         stripped = q.lstrip()
         head = stripped.upper()
 
-        if head.startswith("SELECT") or head.startswith("WITH"):
+        if head.startswith("SELECT") or (
+            head.startswith("WITH") and not _with_clause_data_modifying(stripped)
+        ):
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(q, *params)
             return PgCursor(rows=list(rows))
 
-        if head.startswith("INSERT"):
+        if head.startswith("INSERT") or (
+            head.startswith("WITH")
+            and re.search(r"\)\s*INSERT\s+INTO\b", stripped, re.I | re.DOTALL)
+        ):
             tbl = _insert_table_name(q)
             if tbl in _INSERT_RETURNING_TABLES and "RETURNING" not in head:
                 q_ret = stripped.rstrip().rstrip(";") + " RETURNING id"
@@ -309,6 +339,12 @@ async def _run_ddl(db: _PgConnectionFacade) -> None:
             created_at TIMESTAMP DEFAULT NOW()
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """,
     ]
     for s in stmts:
         await db.execute(s)
@@ -370,6 +406,16 @@ async def _run_ddl(db: _PgConnectionFacade) -> None:
         )
     except Exception:
         pass
+
+    try:
+        await db.execute(
+            """
+            INSERT INTO settings (key, value) VALUES ('active_payment_method', 'tbank')
+            ON CONFLICT (key) DO NOTHING
+            """
+        )
+    except Exception as e:
+        logging.warning("settings seed: %s", e)
 
 
 async def close_db_connection() -> None:

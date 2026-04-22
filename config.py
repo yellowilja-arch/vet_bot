@@ -122,7 +122,7 @@ MAX_ACTIVE_PER_DOCTOR = 3
 from data.problems import SPECIALISTS, SPECIALIZATION_KEYS  # noqa: E402
 
 # Стоимость консультации при выборе темы из меню (динамический список из БД)
-DEFAULT_CONSULTATION_PRICE = 500
+DEFAULT_CONSULTATION_PRICE = 1300
 
 # Legacy: почти не используется (маршрутизация — pick_doctor_for_topic → SQLite).
 DOCTORS = {k: [] for k in SPECIALIZATION_KEYS}

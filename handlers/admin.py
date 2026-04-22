@@ -1,7 +1,7 @@
 from aiogram import Router, F
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command, StateFilter
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from html import escape
 import config as _cfg
@@ -46,6 +46,7 @@ from database.doctors import (
 )
 from database.queue import get_queue_length, clear_queue
 from database.db import get_db
+from database.settings import get_active_payment_method, set_active_payment_method
 from utils.helpers import safe_send_message, split_text_chunks
 from keyboards.admin import (
     get_support_queue_keyboard,
@@ -99,6 +100,8 @@ _ADMIN_INTERRUPTIBLE_STATES = (
     AdminState.edit_doctor_name,
     AdminState.edit_doctor_specs,
     AdminState.edit_doctor_active,
+    AdminState.waiting_payment_method_pick,
+    AdminState.waiting_payment_method_confirm,
 )
 
 
@@ -419,6 +422,100 @@ async def admin_health_button(message: Message):
     if not await user_in_admin_context(user_id):
         return
     await _reply_admin_health(user_id)
+
+
+@router.message(Command("set_payment_method"))
+async def admin_set_payment_method_cmd(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS or not await user_in_admin_context(user_id):
+        return
+    await state.set_state(AdminState.waiting_payment_method_pick)
+    cur = await get_active_payment_method()
+    cur_l = "Т-Банк" if cur == "tbank" else "по чеку (фото)"
+    await message.answer(
+        f"Сейчас: <b>{escape(cur_l)}</b>\n\n"
+        "Выберите способ оплаты для клиентов:",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="💳 Т-Банк", callback_data="setpay:tbank"),
+                    InlineKeyboardButton(text="🧾 Чек", callback_data="setpay:receipt"),
+                ],
+            ]
+        ),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(
+    StateFilter(AdminState.waiting_payment_method_pick), F.data.startswith("setpay:")
+)
+async def admin_set_payment_method_pick(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("⛔", show_alert=True)
+        return
+    part = (call.data or "").split(":", 1)
+    if len(part) < 2 or part[1] not in ("tbank", "receipt"):
+        await call.answer()
+        return
+    mode = part[1]
+    label = "Т-Банк" if mode == "tbank" else "по чеку (фото)"
+    await state.update_data(pending_payment_method=mode)
+    await state.set_state(AdminState.waiting_payment_method_confirm)
+    await call.message.edit_text(
+        f"Выбран способ: «{escape(label)}»\n\n"
+        "Подтвердите смену способа оплаты.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ Да, подтверждаю", callback_data="setpaycf:yes"
+                    ),
+                    InlineKeyboardButton(text="❌ Отмена", callback_data="setpaycf:no"),
+                ],
+            ]
+        ),
+        parse_mode="HTML",
+    )
+    await call.answer()
+
+
+@router.callback_query(
+    StateFilter(AdminState.waiting_payment_method_confirm), F.data == "setpaycf:yes"
+)
+async def admin_set_payment_method_yes(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("⛔", show_alert=True)
+        return
+    data = await state.get_data()
+    mode = data.get("pending_payment_method")
+    await state.clear()
+    if mode not in ("tbank", "receipt"):
+        await call.message.edit_text("❌ Сессия устарела. Повторите /set_payment_method")
+        await call.answer()
+        return
+    try:
+        await set_active_payment_method(str(mode))
+    except Exception as e:
+        logging.exception("set_active_payment_method")
+        await call.message.edit_text(f"❌ Не удалось сохранить: {escape(str(e)[:200])}")
+        await call.answer()
+        return
+    label = "Т-Банк" if mode == "tbank" else "по чеку (фото)"
+    await call.message.edit_text(
+        f"✅ Способ оплаты изменён на «{escape(label)}»",
+        parse_mode="HTML",
+    )
+    await call.answer()
+
+
+@router.callback_query(
+    StateFilter(AdminState.waiting_payment_method_confirm), F.data == "setpaycf:no"
+)
+async def admin_set_payment_method_no(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.message.edit_text("Смена способа оплаты отменена.")
+    await call.answer()
 
 
 def _format_ts_for_admin(val) -> str:

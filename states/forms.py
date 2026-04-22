@@ -51,3 +51,5 @@ class AdminState(StatesGroup):
     edit_doctor_name = State()
     edit_doctor_specs = State()
     edit_doctor_active = State()
+    waiting_payment_method_pick = State()
+    waiting_payment_method_confirm = State()
