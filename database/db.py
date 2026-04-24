@@ -260,7 +260,8 @@ async def _run_ddl(db: _PgConnectionFacade) -> None:
             created_at TIMESTAMP DEFAULT NOW(),
             confirmed_at TIMESTAMP,
             tbank_order_id TEXT,
-            tbank_payment_id TEXT
+            tbank_payment_id TEXT,
+            invoice_payload TEXT
         )
         """,
         """
@@ -366,6 +367,11 @@ async def _run_ddl(db: _PgConnectionFacade) -> None:
         "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS doctor_name TEXT",
         "ALTER TABLE payments ADD COLUMN IF NOT EXISTS tbank_order_id TEXT",
         "ALTER TABLE payments ADD COLUMN IF NOT EXISTS tbank_payment_id TEXT",
+        "ALTER TABLE payments ADD COLUMN IF NOT EXISTS invoice_payload TEXT",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_invoice_payload
+        ON payments(invoice_payload) WHERE invoice_payload IS NOT NULL
+        """,
         """
         ALTER TABLE doctors ADD COLUMN IF NOT EXISTS presence_status TEXT
         NOT NULL DEFAULT 'offline'
@@ -410,12 +416,20 @@ async def _run_ddl(db: _PgConnectionFacade) -> None:
     try:
         await db.execute(
             """
-            INSERT INTO settings (key, value) VALUES ('active_payment_method', 'tbank')
+            INSERT INTO settings (key, value) VALUES ('active_payment_method', 'yookassa')
             ON CONFLICT (key) DO NOTHING
             """
         )
     except Exception as e:
         logging.warning("settings seed: %s", e)
+
+    try:
+        await db.execute(
+            "UPDATE settings SET value = 'yookassa' WHERE key = 'active_payment_method' AND value = 'tbank'"
+        )
+        await db.commit()
+    except Exception as e:
+        logging.warning("Миграция active_payment_method tbank → yookassa: %s", e)
 
 
 async def close_db_connection() -> None:

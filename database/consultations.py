@@ -80,8 +80,8 @@ async def save_consultation_start(client_id: int, anonymous_id: str, doctor_id: 
         return cursor.lastrowid
 
 
-async def cancel_tbank_checkout(consultation_id: int, client_id: int) -> None:
-    """Отмена неуспешного создания платежа Т-Банка: pending-платёж и консультация waiting_payment."""
+async def cancel_pending_checkout(consultation_id: int, client_id: int) -> None:
+    """Отмена ожидающей оплаты: pending-платёж и консультация waiting_payment."""
     db = await get_db()
     async with _db_lock:
         await db.execute(

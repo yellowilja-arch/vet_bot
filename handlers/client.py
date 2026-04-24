@@ -1,14 +1,16 @@
 import logging
-import uuid
+import secrets
 import redis
 
-from aiogram import Router, F
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, BaseFilter
 from aiogram.types import (
-    Message,
     CallbackQuery,
-    InlineKeyboardMarkup,
     InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    LabeledPrice,
+    Message,
+    PreCheckoutQuery,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
@@ -18,9 +20,9 @@ from config import (
     ADMIN_IDS,
     PHONE_NUMBER,
     DEFAULT_CONSULTATION_PRICE,
+    PAYMENT_PROVIDER_TOKEN,
     REDIS_URL,
-    PUBLIC_WEBHOOK_BASE,
-    tbank_acquiring_configured,
+    yookassa_telegram_payments_configured,
 )
 from data.problems import (
     PROBLEMS,
@@ -63,11 +65,16 @@ from database.consultations import (
     get_consultation_doctor_and_topic,
     set_consultation_offline_intake,
     finalize_questionnaire_sla,
-    cancel_tbank_checkout,
+    cancel_pending_checkout,
 )
-from database.payments import save_payment, save_tbank_pending_payment
+from database.payments import (
+    get_pending_payment_by_invoice_payload,
+    save_invoice_pending_payment,
+    save_payment,
+    set_telegram_charge_for_invoice,
+)
 from database.settings import get_active_payment_method
-from services.tbank import tbank_init_payment
+from services.client_payment_flow import start_questionnaire_after_confirmed_payment
 from database.users import save_user_if_new, touch_user_last_seen
 from database.support import (
     add_support_message,
@@ -180,9 +187,25 @@ async def _post_consultation_assign_for_payment(consultation_id: int, data: dict
         await assign_pending_doctor_from_topic(consultation_id, problem_key)
 
 
-async def _client_start_tbank(
+def _new_invoice_payload() -> str:
+    p = secrets.token_urlsafe(48)
+    b = p.encode("utf-8")
+    if len(b) > 128:
+        return b[:128].decode("utf-8", errors="ignore")
+    return p
+
+
+async def _client_start_yookassa(
     call: CallbackQuery, state: FSMContext, user_id: int, data: dict, problem_key: str
 ) -> bool:
+    if not yookassa_telegram_payments_configured():
+        await call.message.edit_text(
+            "❌ Онлайн-оплата через Telegram недоступна. "
+            "Задайте PAYMENT_PROVIDER_TOKEN (ЮKassa: @BotFather → бот → Payments).",
+        )
+        await call.answer()
+        return False
+
     price = int(data.get("problem_price") or DEFAULT_CONSULTATION_PRICE)
     prob_name = (data.get("problem_name") or "").strip() or _problem_or_spec_title(problem_key)
     anonymous_id = get_anonymous_id(problem_key, user_id)
@@ -195,44 +218,40 @@ async def _client_start_tbank(
         await call.answer()
         return False
 
-    notif = f"{PUBLIC_WEBHOOK_BASE.rstrip('/')}/tbank/notify"
-    if not tbank_acquiring_configured() or not str(notif).startswith("https://"):
-        await cancel_tbank_checkout(consultation_id, user_id)
-        await call.message.edit_text(
-            "❌ Онлайн-оплата сейчас недоступна. Проверьте настройки TBANK_*, PUBLIC_WEBHOOK_BASE (https, как в Railway).",
-        )
-        await call.answer()
-        return False
-
     await _post_consultation_assign_for_payment(consultation_id, data, problem_key)
-    order_id = f"vet{consultation_id}_{uuid.uuid4().hex[:12]}"
+    invoice_payload = _new_invoice_payload()
     try:
-        await save_tbank_pending_payment(user_id, consultation_id, price, order_id)
+        await save_invoice_pending_payment(user_id, consultation_id, price, invoice_payload)
     except Exception:
-        logging.exception("save_tbank_pending_payment")
-        await cancel_tbank_checkout(consultation_id, user_id)
+        logging.exception("save_invoice_pending_payment")
+        await cancel_pending_checkout(consultation_id, user_id)
         await call.message.edit_text("❌ Ошибка записи платежа. Попробуйте позже.")
         await call.answer()
         return False
 
-    desc = f"Консультация {prob_name[:100]}"
-    init = await tbank_init_payment(
-        amount_kopecks=price * 100,
-        order_id=order_id,
-        description=desc,
-        notification_url=notif,
-    )
-    if not init.get("Success"):
-        await cancel_tbank_checkout(consultation_id, user_id)
-        msg = (init.get("Message") or init.get("Details") or "ошибка банка")[:300]
-        await call.message.edit_text(f"❌ Не удалось создать платёж: {escape(str(msg))}")
-        await call.answer()
+    title = f"Консультация: {prob_name[:28]}"
+    desc = f"Консультация: {prob_name[:200]}"
+    msg = call.message
+    if not msg:
+        await cancel_pending_checkout(consultation_id, user_id)
+        await call.answer("Ошибка чата", show_alert=True)
         return False
-
-    pay_url = init.get("PaymentURL") or init.get("PaymentUrl")
-    if not pay_url:
-        await cancel_tbank_checkout(consultation_id, user_id)
-        await call.message.edit_text("❌ Банк не вернул ссылку на оплату.")
+    try:
+        await msg.answer_invoice(
+            title=title,
+            description=desc,
+            payload=invoice_payload,
+            provider_token=PAYMENT_PROVIDER_TOKEN,
+            currency="RUB",
+            prices=[LabeledPrice(label="Консультация", amount=price * 100)],
+            max_tip_amount=0,
+        )
+    except Exception:
+        logging.exception("answer_invoice")
+        await cancel_pending_checkout(consultation_id, user_id)
+        await msg.answer(
+            "❌ Не удалось открыть оплату в Telegram. Попробуйте позже или выберите оплату по чеку (админ может переключить способ).",
+        )
         await call.answer()
         return False
 
@@ -240,16 +259,16 @@ async def _client_start_tbank(
         problem_key=problem_key,
         consultation_id=consultation_id,
         anonymous_id=anonymous_id,
-        tbank_consultation_id=consultation_id,
+        pending_checkout_cid=consultation_id,
     )
     await state.set_state(PaymentState.waiting_payment)
-    await call.message.edit_text(
-        "💳 <b>Онлайн-оплата (Т-Банк)</b>\n\n"
+    await msg.answer(
+        "💳 <b>Онлайн-оплата (ЮKassa в Telegram)</b>\n\n"
         f"Сумма: <b>{price} ₽</b>\n\n"
-        "Перейдите по ссылке и завершите оплату. После этого вы автоматически перейдёте к анкете о питомце.",
+        "Оплатите в форме выше. После успешной оплаты откроется анкета о питомце.\n\n"
+        "Можно отменить ожидание кнопкой ниже (если ещё не оплатили).",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="🔗 Перейти к оплате", url=pay_url)],
                 [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_payment")],
             ]
         ),
@@ -257,6 +276,57 @@ async def _client_start_tbank(
     )
     await call.answer()
     return True
+
+
+@router.pre_checkout_query()
+async def pre_checkout_yookassa(q: PreCheckoutQuery) -> None:
+    pl = (q.invoice_payload or "").strip()
+    if not pl:
+        await q.answer(ok=False, error_message="Платёж не распознан.")
+        return
+    row = await get_pending_payment_by_invoice_payload(pl)
+    if not row:
+        await q.answer(ok=False, error_message="Счёт не найден или устарел. Начните оплату с /start")
+        return
+    _rid, client_id, _consult_id, amount_rub, _st = int(row[0]), int(row[1]), row[2], int(row[3]), row[4]
+    if int(client_id) != int(q.from_user.id):
+        await q.answer(ok=False, error_message="Счёт выписан на другой аккаунт.")
+        return
+    if int(q.total_amount) != int(amount_rub) * 100:
+        await q.answer(ok=False, error_message="Сумма не совпадает с выбранной услугой.")
+        return
+    await q.answer(ok=True)
+
+
+@router.message(lambda m: m.successful_payment is not None)
+async def successful_telegram_payment(
+    message: Message,
+    bot: Bot,
+    dispatcher: Dispatcher,
+) -> None:
+    sp = message.successful_payment
+    if not sp:
+        return
+    pl = (sp.invoice_payload or "").strip()
+    row = await get_pending_payment_by_invoice_payload(pl)
+    if not row:
+        logging.warning("successful_payment: нет pending по payload")
+        return
+    pay_id, client_id, consultation_id, _amount = int(row[0]), int(row[1]), int(row[2]), int(row[3])
+    if int(client_id) != int(message.from_user.id):
+        logging.warning("successful_payment: client mismatch pay_id=%s", pay_id)
+        return
+    await set_telegram_charge_for_invoice(
+        pl,
+        telegram_payment_charge_id=sp.telegram_payment_charge_id,
+        provider_payment_charge_id=sp.provider_payment_charge_id,
+    )
+    await start_questionnaire_after_confirmed_payment(
+        client_id,
+        int(consultation_id),
+        bot=bot,
+        dispatcher=dispatcher,
+    )
 
 
 async def _client_show_receipt_flow(call: CallbackQuery, state: FSMContext, header_html: str) -> None:
@@ -1049,8 +1119,8 @@ async def pay_run_execute(call: CallbackQuery, state: FSMContext):
             await call.answer("Сначала выберите тему заново (меню /start).", show_alert=True)
             return
         problem_key = str(spec_key)
-        if method == "tbank":
-            await _client_start_tbank(call, state, user_id, data, problem_key)
+        if method == "yookassa":
+            await _client_start_yookassa(call, state, user_id, data, problem_key)
             return
         header = (
             f"💰 <b>Оплата консультации</b>\n\n"
@@ -1104,8 +1174,8 @@ async def pay_run_execute(call: CallbackQuery, state: FSMContext):
                 f"📋 Тема: {escape(_problem_or_spec_title(problem_key))}\n"
                 f"💰 <b>Стоимость: {price} ₽</b>"
             )
-    if method == "tbank":
-        await _client_start_tbank(call, state, user_id, data, problem_key)
+    if method == "yookassa":
+        await _client_start_yookassa(call, state, user_id, data, problem_key)
         return
     await _client_show_receipt_flow(call, state, header)
 
@@ -1266,12 +1336,12 @@ async def handle_receipt(message: Message, state: FSMContext):
 @router.callback_query(lambda c: c.data == "cancel_payment")
 async def cancel_payment(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    tcid = data.get("tbank_consultation_id")
-    if tcid:
+    pcid = data.get("pending_checkout_cid")
+    if pcid:
         try:
-            await cancel_tbank_checkout(int(tcid), call.from_user.id)
+            await cancel_pending_checkout(int(pcid), call.from_user.id)
         except Exception:
-            logging.exception("cancel_tbank_checkout on cancel_payment")
+            logging.exception("cancel_pending_checkout on cancel_payment")
     await state.clear()
     await call.message.edit_text("❌ Оплата отменена. Напишите /start для начала.")
     await call.answer()

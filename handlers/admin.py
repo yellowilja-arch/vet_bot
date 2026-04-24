@@ -431,14 +431,16 @@ async def admin_set_payment_method_cmd(message: Message, state: FSMContext):
         return
     await state.set_state(AdminState.waiting_payment_method_pick)
     cur = await get_active_payment_method()
-    cur_l = "Т-Банк" if cur == "tbank" else "по чеку (фото)"
+    cur_l = "ЮKassa (Telegram)" if cur == "yookassa" else "по чеку (фото)"
     await message.answer(
         f"Сейчас: <b>{escape(cur_l)}</b>\n\n"
         "Выберите способ оплаты для клиентов:",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(text="💳 Т-Банк", callback_data="setpay:tbank"),
+                    InlineKeyboardButton(
+                        text="💳 ЮKassa (Telegram)", callback_data="setpay:yookassa"
+                    ),
                     InlineKeyboardButton(text="🧾 Чек", callback_data="setpay:receipt"),
                 ],
             ]
@@ -455,11 +457,11 @@ async def admin_set_payment_method_pick(call: CallbackQuery, state: FSMContext):
         await call.answer("⛔", show_alert=True)
         return
     part = (call.data or "").split(":", 1)
-    if len(part) < 2 or part[1] not in ("tbank", "receipt"):
+    if len(part) < 2 or part[1] not in ("yookassa", "receipt"):
         await call.answer()
         return
     mode = part[1]
-    label = "Т-Банк" if mode == "tbank" else "по чеку (фото)"
+    label = "ЮKassa (Telegram)" if mode == "yookassa" else "по чеку (фото)"
     await state.update_data(pending_payment_method=mode)
     await state.set_state(AdminState.waiting_payment_method_confirm)
     await call.message.edit_text(
@@ -490,7 +492,7 @@ async def admin_set_payment_method_yes(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     mode = data.get("pending_payment_method")
     await state.clear()
-    if mode not in ("tbank", "receipt"):
+    if mode not in ("yookassa", "receipt"):
         await call.message.edit_text("❌ Сессия устарела. Повторите /set_payment_method")
         await call.answer()
         return
@@ -501,7 +503,7 @@ async def admin_set_payment_method_yes(call: CallbackQuery, state: FSMContext):
         await call.message.edit_text(f"❌ Не удалось сохранить: {escape(str(e)[:200])}")
         await call.answer()
         return
-    label = "Т-Банк" if mode == "tbank" else "по чеку (фото)"
+    label = "ЮKassa (Telegram)" if mode == "yookassa" else "по чеку (фото)"
     await call.message.edit_text(
         f"✅ Способ оплаты изменён на «{escape(label)}»",
         parse_mode="HTML",

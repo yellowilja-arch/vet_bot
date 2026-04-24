@@ -12,13 +12,13 @@ async def save_payment(client_id: int, consultation_id: int, receipt_file_id: st
         await db.commit()
 
 
-async def save_tbank_pending_payment(
+async def save_invoice_pending_payment(
     client_id: int,
     consultation_id: int,
     amount_rubles: int,
-    tbank_order_id: str,
+    invoice_payload: str,
 ) -> None:
-    """Ожидание оплаты через Т-Банк (без фото чека)."""
+    """Ожидание оплаты через Bot Payments (ЮKassa / provider token), без фото чека."""
     db = await get_db()
     async with _db_lock:
         await db.execute(
@@ -27,39 +27,47 @@ async def save_tbank_pending_payment(
         )
         await db.execute(
             """
-            INSERT INTO payments (client_id, consultation_id, amount, status, receipt_file_id, tbank_order_id)
+            INSERT INTO payments (client_id, consultation_id, amount, status, receipt_file_id, invoice_payload)
             VALUES (?, ?, ?, 'pending', NULL, ?)
             """,
-            (client_id, consultation_id, int(amount_rubles), tbank_order_id),
+            (client_id, consultation_id, int(amount_rubles), invoice_payload),
         )
         await db.commit()
 
 
-async def get_payment_by_tbank_order_id(tbank_order_id: str):
-    """Последняя запись по OrderId Т-Банка."""
+async def get_pending_payment_by_invoice_payload(invoice_payload: str):
+    """Ожидающая оплата по payload инвойса Telegram (до 128 байт)."""
     db = await get_db()
     cursor = await db.execute(
         """
-        SELECT id, client_id, consultation_id, amount, status, tbank_order_id, tbank_payment_id
+        SELECT id, client_id, consultation_id, amount, status
         FROM payments
-        WHERE tbank_order_id = ?
+        WHERE invoice_payload = ? AND status = 'pending'
         ORDER BY id DESC
         LIMIT 1
         """,
-        (tbank_order_id,),
+        (invoice_payload,),
     )
     return await cursor.fetchone()
 
 
-async def set_tbank_payment_id_for_order(tbank_order_id: str, tbank_payment_id: str) -> None:
+async def set_telegram_charge_for_invoice(
+    invoice_payload: str,
+    *,
+    telegram_payment_charge_id: str,
+    provider_payment_charge_id: str | None = None,
+) -> None:
+    """Сохраняет ID списания Telegram и (если есть) ID провайдера. Колонки tbank_* — legacy-имена в схеме."""
+    prov = (provider_payment_charge_id or "").strip()
     db = await get_db()
     async with _db_lock:
         await db.execute(
             """
-            UPDATE payments SET tbank_payment_id = ?
-            WHERE tbank_order_id = ? AND status = 'pending'
+            UPDATE payments
+            SET tbank_order_id = ?, tbank_payment_id = ?
+            WHERE invoice_payload = ? AND status = 'pending'
             """,
-            (tbank_payment_id, tbank_order_id),
+            (prov, telegram_payment_charge_id, invoice_payload),
         )
         await db.commit()
 

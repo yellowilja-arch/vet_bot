@@ -106,11 +106,11 @@ async def main():
     
     http_runner = None
     try:
-        from services.tbank_server import start_http_site
+        from services.http_site import start_http_site
 
-        http_runner = await start_http_site(bot, dp, host="0.0.0.0", port=PORT)
+        http_runner = await start_http_site(host="0.0.0.0", port=PORT)
     except Exception as e:
-        logging.warning("HTTP (health, /tbank/notify) не поднят: %s", e)
+        logging.warning("HTTP (health) не поднят: %s", e)
 
     try:
         await dp.start_polling(bot)
