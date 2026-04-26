@@ -1,3 +1,4 @@
+import json
 import logging
 import secrets
 import redis
@@ -237,6 +238,26 @@ async def _client_start_yookassa(
         await call.answer("Ошибка чата", show_alert=True)
         return False
     try:
+        # Фискализация ЮKassa: данные чека; tax_system_code / vat_code — уточнить у бухгалтера
+        _receipt_desc = (title or desc)[:120]
+        _provider_receipt = {
+            "receipt": {
+                "items": [
+                    {
+                        "description": _receipt_desc,
+                        "quantity": 1,
+                        "amount": {
+                            "value": f"{int(price):.2f}",
+                            "currency": "RUB",
+                        },
+                        "vat_code": 1,
+                        "payment_mode": "full_payment",
+                        "payment_subject": "service",
+                    }
+                ],
+                "tax_system_code": 2,
+            }
+        }
         await msg.answer_invoice(
             title=title,
             description=desc,
@@ -244,6 +265,9 @@ async def _client_start_yookassa(
             provider_token=PAYMENT_PROVIDER_TOKEN,
             currency="RUB",
             prices=[LabeledPrice(label="Консультация", amount=price * 100)],
+            need_email=True,
+            send_email_to_provider=True,
+            provider_data=json.dumps(_provider_receipt, ensure_ascii=False),
             max_tip_amount=0,
         )
     except Exception:
